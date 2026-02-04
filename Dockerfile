@@ -32,9 +32,19 @@ RUN pnpm ui:build
 
 ENV NODE_ENV=production
 
-# Security hardening: Run as non-root user
-# The node:22-bookworm image includes a 'node' user (uid 1000)
-# This reduces the attack surface by preventing container escape via root privileges
+# Security: Alias node user to UID 0 (Root) to fix Windows volume permissions
+# while keeping the 'node' username for compatibility.
+# Also install Homebrew as requested.
+RUN apt-get update && apt-get install -y sudo git && \
+    # Install Homebrew
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" && \
+    eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)" && \
+    # Super Node Setup
+    usermod -u 0 -o node && \
+    groupmod -g 0 -o node
+
+ENV PATH="/home/linuxbrew/.linuxbrew/bin:${PATH}"
+
 USER node
 
 CMD ["node", "dist/index.js"]
