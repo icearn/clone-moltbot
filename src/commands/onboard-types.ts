@@ -14,6 +14,7 @@ export type AuthChoice =
   | "openrouter-api-key"
   | "ai-gateway-api-key"
   | "moonshot-api-key"
+  | "moonshot-api-key-cn"
   | "kimi-code-api-key"
   | "synthetic-api-key"
   | "venice-api-key"
@@ -23,10 +24,12 @@ export type AuthChoice =
   | "google-antigravity"
   | "google-gemini-cli"
   | "zai-api-key"
+  | "xiaomi-api-key"
   | "minimax-cloud"
   | "minimax"
   | "minimax-api"
   | "minimax-api-lightning"
+  | "minimax-portal"
   | "opencode-zen"
   | "github-copilot"
   | "copilot-proxy"
@@ -67,6 +70,7 @@ export type OnboardOptions = {
   kimiCodeApiKey?: string;
   geminiApiKey?: string;
   zaiApiKey?: string;
+  xiaomiApiKey?: string;
   minimaxApiKey?: string;
   syntheticApiKey?: string;
   veniceApiKey?: string;
