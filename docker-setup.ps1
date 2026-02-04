@@ -1,13 +1,43 @@
+# --- 0. LOAD .env ---
+$envFile = Join-Path $PSScriptRoot ".env"
+if (Test-Path $envFile) {
+    Get-Content $envFile | ForEach-Object {
+        $line = $_.Trim()
+        if (-not $line -or $line.StartsWith('#')) { return }
+        if ($line.StartsWith('export ')) { $line = $line.Substring(7).Trim() }
+
+        $parts = $line -split '=', 2
+        if ($parts.Count -lt 2) { return }
+
+        $key = $parts[0].Trim()
+        if (-not $key) { return }
+
+        $value = $parts[1].Trim()
+        if (($value.StartsWith('"') -and $value.EndsWith('"')) -or ($value.StartsWith("'") -and $value.EndsWith("'"))) {
+            $value = $value.Substring(1, $value.Length - 2)
+        }
+
+        $existing = [System.Environment]::GetEnvironmentVariable($key, "Process")
+        if ([string]::IsNullOrEmpty($existing)) {
+            $env:$key = $value
+        }
+    }
+}
+
 # --- 1. CONFIGURATION ---
 # Define your extra mounts here (comma separated)
 # Format: "HostPath:ContainerPath,HostPath2:ContainerPath2"
 # Example: "C:\Your\Host\Path:/target/container/path"
-$ExtraMounts = "D:\\Software\\moltmount:/home/node"
+$ExtraMounts = if ([string]::IsNullOrEmpty($env:CLAWDBOT_EXTRA_MOUNTS)) {
+    "D:\\Software\\moltmount:/home/node"
+} else {
+    $env:CLAWDBOT_EXTRA_MOUNTS
+}
 
 # Set standard environment variables
-$env:CLAWDBOT_IMAGE = "moltbot:local"
-$env:CLAWDBOT_CONFIG_DIR = "$HOME\.clawdbot"
-$env:CLAWDBOT_WORKSPACE_DIR = "$HOME\clawd"
+if (-not $env:CLAWDBOT_IMAGE) { $env:CLAWDBOT_IMAGE = "moltbot:local" }
+if (-not $env:CLAWDBOT_CONFIG_DIR) { $env:CLAWDBOT_CONFIG_DIR = "$HOME\.clawdbot" }
+if (-not $env:CLAWDBOT_WORKSPACE_DIR) { $env:CLAWDBOT_WORKSPACE_DIR = "$HOME\clawd" }
 
 # Generate a random token if not already set
 if (-not $env:CLAWDBOT_GATEWAY_TOKEN) {
