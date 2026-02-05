@@ -19,13 +19,22 @@ if (Test-Path $envFile) {
 
         $existing = [System.Environment]::GetEnvironmentVariable($key, "Process")
         if ([string]::IsNullOrEmpty($existing)) {
-            $env:$key = $value
+            Set-Item -Path "Env:$key" -Value $value
         }
     }
 }
-docker build \
-  --build-arg "CLAWDBOT_DOCKER_APT_PACKAGES= $env:CLAWDBOT_DOCKER_APT_PACKAGES " \
-  -t "$IMAGE_NAME" \
-  -f "$ROOT_DIR/Dockerfile" \
-  "$ROOT_DIR"
-docker build -t openclaw:local -f Dockerfile . --build-arg CLAWDBOT_DOCKER_APT_PACKAGES="ffmpeg python3 python3-pip"
+$rootDir = $PSScriptRoot
+
+if (-not $env:OPENCLAW_IMAGE) { $env:OPENCLAW_IMAGE = "openclaw:local" }
+if (-not $env:OPENCLAW_DOCKER_APT_PACKAGES) { $env:OPENCLAW_DOCKER_APT_PACKAGES = "" }
+
+$dockerArgs = @(
+    "build",
+    "--build-arg", "OPENCLAW_DOCKER_APT_PACKAGES=$env:OPENCLAW_DOCKER_APT_PACKAGES",
+    "-t", $env:OPENCLAW_IMAGE,
+    "-f", (Join-Path $rootDir "Dockerfile"),
+    $rootDir
+)
+
+& docker @dockerArgs
+#docker build -t openclaw:local -f Dockerfile . --build-arg OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg python3 python3-pip"

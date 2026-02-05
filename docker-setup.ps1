@@ -19,7 +19,7 @@ if (Test-Path $envFile) {
 
         $existing = [System.Environment]::GetEnvironmentVariable($key, "Process")
         if ([string]::IsNullOrEmpty($existing)) {
-            $env:$key = $value
+            Set-Item -Path "Env:$key" -Value $value
         }
     }
 }
@@ -35,9 +35,9 @@ $ExtraMounts = if ([string]::IsNullOrEmpty($env:CLAWDBOT_EXTRA_MOUNTS)) {
 }
 
 # Set standard environment variables
-if (-not $env:CLAWDBOT_IMAGE) { $env:CLAWDBOT_IMAGE = "moltbot:local" }
-if (-not $env:CLAWDBOT_CONFIG_DIR) { $env:CLAWDBOT_CONFIG_DIR = "$HOME\.clawdbot" }
-if (-not $env:CLAWDBOT_WORKSPACE_DIR) { $env:CLAWDBOT_WORKSPACE_DIR = "$HOME\clawd" }
+if (-not $env:CLAWDBOT_IMAGE) { $env:CLAWDBOT_IMAGE = "openclaw:audio" }
+if (-not $env:CLAWDBOT_CONFIG_DIR) { $env:CLAWDBOT_CONFIG_DIR = "$HOME\.openclaw" }
+if (-not $env:CLAWDBOT_WORKSPACE_DIR) { $env:CLAWDBOT_WORKSPACE_DIR = "$HOME\.openclaw\workspace" }
 
 # Generate a random token if not already set
 if (-not $env:CLAWDBOT_GATEWAY_TOKEN) {
@@ -49,7 +49,7 @@ Write-Host "Gateway Token: $env:CLAWDBOT_GATEWAY_TOKEN"
 $mountsList = $ExtraMounts -split ','
 $yamlContent = @"
 services:
-  moltbot-gateway:
+  openclaw-gateway:
     volumes:
 "@
 
@@ -87,7 +87,7 @@ foreach ($mount in $mountsList) {
 if ($hasMounts) {
     $yamlContent += @"
 
-  moltbot-cli:
+  openclaw-cli:
     volumes:
 "@
     foreach ($mount in $mountsList) {
@@ -103,7 +103,7 @@ Write-Host "Created docker-compose.extra.yml with normalized paths"
 
 # --- 3. RUN COMMANDS ---
 Write-Host "`nRun these commands to start:" -ForegroundColor Cyan
-Write-Host "docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm moltbot-cli onboard"
-Write-Host "docker compose -f docker-compose.yml -f docker-compose.extra.yml up -d moltbot-gateway"
+Write-Host "docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm openclaw-cli onboard"
+Write-Host "docker compose -f docker-compose.yml -f docker-compose.extra.yml up -d openclaw-gateway"
 
-docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm moltbot-cli onboard --install-daemon
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm openclaw-cli onboard --install-daemon
