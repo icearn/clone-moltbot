@@ -255,4 +255,42 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.sources).toContain("sessions");
   });
+
+  it("applies strategic preset defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            strategy: "strategic",
+          },
+        },
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.strategy).toBe("strategic");
+    expect(resolved?.experimental.sessionMemory).toBe(true);
+    expect(resolved?.sources).toEqual(["memory", "sessions"]);
+    expect(resolved?.query.maxResults).toBe(8);
+    expect(resolved?.query.recencyBoost).toBe(0.22);
+    expect(resolved?.sync.sessions).toEqual({
+      deltaBytes: 40000,
+      deltaMessages: 20,
+    });
+  });
+
+  it("keeps explicit sessionMemory=false even in strategic preset", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            strategy: "strategic",
+            experimental: { sessionMemory: false },
+          },
+        },
+      },
+    };
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.experimental.sessionMemory).toBe(false);
+    expect(resolved?.sources).toEqual(["memory"]);
+  });
 });

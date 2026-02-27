@@ -15,6 +15,7 @@ export type SearchRowResult = {
   score: number;
   snippet: string;
   source: SearchSource;
+  updatedAt?: number;
 };
 
 export async function searchVector(params: {
@@ -36,6 +37,7 @@ export async function searchVector(params: {
       .prepare(
         `SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
           `       c.source,\n` +
+          `       c.updated_at,\n` +
           `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
           `  FROM ${params.vectorTable} v\n` +
           `  JOIN chunks c ON c.id = v.id\n` +
@@ -55,6 +57,7 @@ export async function searchVector(params: {
       end_line: number;
       text: string;
       source: SearchSource;
+      updated_at: number;
       dist: number;
     }>;
     return rows.map((row) => ({
@@ -65,6 +68,7 @@ export async function searchVector(params: {
       score: 1 - row.dist,
       snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
       source: row.source,
+      updatedAt: row.updated_at,
     }));
   }
 
@@ -90,6 +94,7 @@ export async function searchVector(params: {
       score: entry.score,
       snippet: truncateUtf16Safe(entry.chunk.text, params.snippetMaxChars),
       source: entry.chunk.source,
+      updatedAt: undefined,
     }));
 }
 
@@ -154,10 +159,12 @@ export async function searchKeyword(params: {
 
   const rows = params.db
     .prepare(
-      `SELECT id, path, source, start_line, end_line, text,\n` +
+      `SELECT f.id, f.path, f.source, f.start_line, f.end_line, f.text,\n` +
+        `       c.updated_at,\n` +
         `       bm25(${params.ftsTable}) AS rank\n` +
-        `  FROM ${params.ftsTable}\n` +
-        ` WHERE ${params.ftsTable} MATCH ? AND model = ?${params.sourceFilter.sql}\n` +
+        `  FROM ${params.ftsTable} f\n` +
+        `  JOIN chunks c ON c.id = f.id\n` +
+        ` WHERE ${params.ftsTable} MATCH ? AND f.model = ?${params.sourceFilter.sql}\n` +
         ` ORDER BY rank ASC\n` +
         ` LIMIT ?`,
     )
@@ -168,6 +175,7 @@ export async function searchKeyword(params: {
     start_line: number;
     end_line: number;
     text: string;
+    updated_at: number;
     rank: number;
   }>;
 
@@ -182,6 +190,7 @@ export async function searchKeyword(params: {
       textScore,
       snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
       source: row.source,
+      updatedAt: row.updated_at,
     };
   });
 }

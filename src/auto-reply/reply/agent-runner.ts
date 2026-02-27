@@ -9,6 +9,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { recordRunReinforcement } from "../../agents/reinforcement-ledger.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -19,6 +20,7 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import { emitDiagnosticEvent, isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../../utils/usage-format.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
@@ -36,6 +38,7 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.j
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import { buildModelSwitchNotice } from "./model-switch-notice.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -335,7 +338,8 @@ export async function runReplyAgent(params: {
       return finalizeWithFollowup(runOutcome.payload, queueKey, runFollowupTurn);
     }
 
-    const { runResult, fallbackProvider, fallbackModel, directlySentBlockKeys } = runOutcome;
+    const { runResult, fallbackProvider, fallbackModel, fallbackAttempts, directlySentBlockKeys } =
+      runOutcome;
     let { didLogHeartbeatStrip, autoCompactionCompleted } = runOutcome;
 
     if (
@@ -375,6 +379,16 @@ export async function runReplyAgent(params: {
     const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+    const modelSwitchNotice = buildModelSwitchNotice({
+      requestedProvider: followupRun.run.provider,
+      requestedModel: followupRun.run.model,
+      usedProvider: providerUsed,
+      usedModel: modelUsed,
+      attempts: fallbackAttempts,
+    });
+    if (modelSwitchNotice && sessionKey) {
+      enqueueSystemEvent(modelSwitchNotice, { sessionKey });
+    }
     const cliSessionId = isCliProvider(providerUsed, cfg)
       ? runResult.meta.agentMeta?.sessionId?.trim()
       : undefined;
@@ -509,9 +523,21 @@ export async function runReplyAgent(params: {
     if (verboseEnabled && activeIsNewSession) {
       finalPayloads = [{ text: `🧭 New session: ${followupRun.run.sessionId}` }, ...finalPayloads];
     }
+    if (modelSwitchNotice && !isHeartbeat) {
+      finalPayloads = [{ text: modelSwitchNotice }, ...finalPayloads];
+    }
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
+
+    void recordRunReinforcement({
+      agentId: followupRun.run.agentId,
+      workspaceDir: followupRun.run.workspaceDir,
+      sessionKey,
+      successfulReply: finalPayloads.length > 0,
+      modelSwitchNotice,
+      fallbackRecovered: Boolean(fallbackAttempts && fallbackAttempts.length > 0),
+    }).catch(() => {});
 
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,

@@ -25,19 +25,19 @@ if (Test-Path $envFile) {
 }
 
 # --- 1. CONFIGURATION ---
-# Define your extra mounts here (comma separated)
-# Format: "HostPath:ContainerPath,HostPath2:ContainerPath2"
-# Example: "C:\Your\Host\Path:/target/container/path"
-$ExtraMounts = if ([string]::IsNullOrEmpty($env:CLAWDBOT_EXTRA_MOUNTS)) {
-    "D:\\Software\\moltmount:/home/node"
-} else {
-    $env:CLAWDBOT_EXTRA_MOUNTS
-}
-
 # Set standard environment variables
 if (-not $env:CLAWDBOT_IMAGE) { $env:CLAWDBOT_IMAGE = "openclaw:audio" }
 if (-not $env:CLAWDBOT_CONFIG_DIR) { $env:CLAWDBOT_CONFIG_DIR = "$HOME\.openclaw" }
 if (-not $env:CLAWDBOT_WORKSPACE_DIR) { $env:CLAWDBOT_WORKSPACE_DIR = "$HOME\.openclaw\workspace" }
+
+# Define your extra mounts here (comma separated)
+# Format: "HostPath:ContainerPath,HostPath2:ContainerPath2"
+# Example: "C:\Your\Host\Path:/target/container/path"
+$ExtraMounts = if ([string]::IsNullOrEmpty($env:CLAWDBOT_EXTRA_MOUNTS)) {
+    "$($env:CLAWDBOT_CONFIG_DIR):/home/node/.openclaw"
+} else {
+    $env:CLAWDBOT_EXTRA_MOUNTS
+}
 
 # Generate a random token if not already set
 if (-not $env:CLAWDBOT_GATEWAY_TOKEN) {
@@ -57,12 +57,13 @@ function Format-DockerPath {
     param ($PathString)
     if (-not $PathString) { return $null }
     
-    # Split host:container
-    $parts = $PathString -split ':', 2
-    if ($parts.Count -lt 2) { return $PathString } # Return as-is if parsing fails
-    
-    $hostPath = $parts[0]
-    $containerPath = $parts[1]
+    # Split host:container using the last colon so Windows drive letters stay intact.
+    $splitIndex = $PathString.LastIndexOf(':')
+    if ($splitIndex -lt 1 -or $splitIndex -ge ($PathString.Length - 1)) { return $PathString }
+
+    $hostPath = $PathString.Substring(0, $splitIndex)
+    $containerPath = $PathString.Substring($splitIndex + 1)
+    if (-not $containerPath.StartsWith('/')) { return $PathString }
     
     # Try to resolve host path to absolute path to handle relative paths correctly
     if (Test-Path $hostPath) {

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { FallbackAttempt } from "../../agents/model-fallback.js";
 import type { TypingMode } from "../../config/types.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -9,12 +10,14 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
+import { recordRunReinforcement } from "../../agents/reinforcement-ledger.js";
 import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { buildModelSwitchNotice } from "./model-switch-notice.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
@@ -124,6 +127,7 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
+      let fallbackAttempts: FallbackAttempt[] = [];
       try {
         const fallbackResult = await runWithModelFallback({
           cfg: queued.run.config,
@@ -187,6 +191,7 @@ export function createFollowupRunner(params: {
         runResult = fallbackResult.result;
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        fallbackAttempts = fallbackResult.attempts;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         defaultRuntime.error?.(`Followup agent failed before reply: ${message}`);
@@ -257,8 +262,22 @@ export function createFollowupRunner(params: {
       });
       const finalPayloads = suppressMessagingToolReplies ? [] : dedupedPayloads;
 
+      const usedProvider = runResult.meta.agentMeta?.provider ?? fallbackProvider;
+      const usedModel = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const modelSwitchNotice = buildModelSwitchNotice({
+        requestedProvider: queued.run.provider,
+        requestedModel: queued.run.model,
+        usedProvider,
+        usedModel,
+        attempts: fallbackAttempts,
+      });
+
       if (finalPayloads.length === 0) {
         return;
+      }
+
+      if (modelSwitchNotice && opts?.isHeartbeat !== true) {
+        finalPayloads.unshift({ text: modelSwitchNotice });
       }
 
       if (autoCompactionCompleted) {
@@ -277,6 +296,15 @@ export function createFollowupRunner(params: {
       }
 
       await sendFollowupPayloads(finalPayloads, queued);
+
+      void recordRunReinforcement({
+        agentId: queued.run.agentId,
+        workspaceDir: queued.run.workspaceDir,
+        sessionKey: queued.run.sessionKey,
+        successfulReply: finalPayloads.length > 0,
+        modelSwitchNotice,
+        fallbackRecovered: fallbackAttempts.length > 0,
+      }).catch(() => {});
     } finally {
       typing.markRunComplete();
     }

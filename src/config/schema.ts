@@ -224,6 +224,7 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.envelopeElapsed": "Envelope Elapsed",
   "agents.defaults.memorySearch": "Memory Search",
   "agents.defaults.memorySearch.enabled": "Enable Memory Search",
+  "agents.defaults.memorySearch.strategy": "Memory Search Strategy",
   "agents.defaults.memorySearch.sources": "Memory Search Sources",
   "agents.defaults.memorySearch.extraPaths": "Extra Memory Paths",
   "agents.defaults.memorySearch.experimental.sessionMemory":
@@ -249,6 +250,7 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.sync.sessions.deltaMessages": "Session Delta Messages",
   "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
   "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
+  "agents.defaults.memorySearch.query.recencyBoost": "Memory Search Recency Boost",
   "agents.defaults.memorySearch.query.hybrid.enabled": "Memory Search Hybrid",
   "agents.defaults.memorySearch.query.hybrid.vectorWeight": "Memory Search Vector Weight",
   "agents.defaults.memorySearch.query.hybrid.textWeight": "Memory Search Text Weight",
@@ -535,6 +537,8 @@ const FIELD_HELP: Record<string, string> = {
   "agents.defaults.models": "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.memorySearch":
     "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
+  "agents.defaults.memorySearch.strategy":
+    'Memory strategy preset ("lite", "balanced", or "strategic") that tunes recall defaults.',
   "agents.defaults.memorySearch.sources":
     'Sources to index for memory search (default: ["memory"]; add "sessions" to include session transcripts).',
   "agents.defaults.memorySearch.extraPaths":
@@ -569,6 +573,8 @@ const FIELD_HELP: Record<string, string> = {
     "Optional override path to sqlite-vec extension library (.dylib/.so/.dll).",
   "agents.defaults.memorySearch.query.hybrid.enabled":
     "Enable hybrid BM25 + vector search for memory (default: true).",
+  "agents.defaults.memorySearch.query.recencyBoost":
+    "How much recency influences ranking (0-1, higher favors newer memory).",
   "agents.defaults.memorySearch.query.hybrid.vectorWeight":
     "Weight for vector similarity when merging results (0-1).",
   "agents.defaults.memorySearch.query.hybrid.textWeight":

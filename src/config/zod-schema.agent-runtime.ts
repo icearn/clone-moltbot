@@ -309,6 +309,9 @@ export const AgentToolsSchema = z
 export const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
+    strategy: z
+      .union([z.literal("lite"), z.literal("balanced"), z.literal("strategic")])
+      .optional(),
     sources: z.array(z.union([z.literal("memory"), z.literal("sessions")])).optional(),
     extraPaths: z.array(z.string()).optional(),
     experimental: z
@@ -389,6 +392,7 @@ export const MemorySearchSchema = z
       .object({
         maxResults: z.number().int().positive().optional(),
         minScore: z.number().min(0).max(1).optional(),
+        recencyBoost: z.number().min(0).max(1).optional(),
         hybrid: z
           .object({
             enabled: z.boolean().optional(),

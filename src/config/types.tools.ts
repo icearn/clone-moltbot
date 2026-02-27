@@ -224,6 +224,8 @@ export type AgentToolsConfig = {
 export type MemorySearchConfig = {
   /** Enable vector memory search (default: true). */
   enabled?: boolean;
+  /** Strategy preset for memory retrieval defaults. */
+  strategy?: "lite" | "balanced" | "strategic";
   /** Sources to index and search (default: ["memory"]). */
   sources?: Array<"memory" | "sessions">;
   /** Extra paths to include in memory search (directories or .md files). */
@@ -303,6 +305,8 @@ export type MemorySearchConfig = {
   query?: {
     maxResults?: number;
     minScore?: number;
+    /** Recency influence when ranking memory hits (0-1). */
+    recencyBoost?: number;
     hybrid?: {
       /** Enable hybrid BM25 + vector search (default: true). */
       enabled?: boolean;

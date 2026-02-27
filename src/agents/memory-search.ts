@@ -5,8 +5,11 @@ import { resolveStateDir } from "../config/paths.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
+export type MemorySearchStrategy = "lite" | "balanced" | "strategic";
+
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
+  strategy: MemorySearchStrategy;
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
   provider: "openai" | "local" | "gemini" | "auto";
@@ -57,6 +60,7 @@ export type ResolvedMemorySearchConfig = {
   query: {
     maxResults: number;
     minScore: number;
+    recencyBoost: number;
     hybrid: {
       enabled: boolean;
       vectorWeight: number;
@@ -79,19 +83,67 @@ const DEFAULT_SESSION_DELTA_BYTES = 100_000;
 const DEFAULT_SESSION_DELTA_MESSAGES = 50;
 const DEFAULT_MAX_RESULTS = 6;
 const DEFAULT_MIN_SCORE = 0.35;
+const DEFAULT_RECENCY_BOOST = 0.12;
 const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
 const DEFAULT_CACHE_ENABLED = true;
 const DEFAULT_SOURCES: Array<"memory" | "sessions"> = ["memory"];
+const DEFAULT_STRATEGY: MemorySearchStrategy = "balanced";
+
+const STRATEGY_DEFAULTS: Record<
+  MemorySearchStrategy,
+  {
+    sessionMemory: boolean;
+    defaultSources: Array<"memory" | "sessions">;
+    maxResults: number;
+    minScore: number;
+    recencyBoost: number;
+    candidateMultiplier: number;
+    sessionsDeltaBytes: number;
+    sessionsDeltaMessages: number;
+  }
+> = {
+  lite: {
+    sessionMemory: false,
+    defaultSources: ["memory"],
+    maxResults: 4,
+    minScore: 0.4,
+    recencyBoost: 0.05,
+    candidateMultiplier: 3,
+    sessionsDeltaBytes: DEFAULT_SESSION_DELTA_BYTES,
+    sessionsDeltaMessages: DEFAULT_SESSION_DELTA_MESSAGES,
+  },
+  balanced: {
+    sessionMemory: false,
+    defaultSources: DEFAULT_SOURCES,
+    maxResults: DEFAULT_MAX_RESULTS,
+    minScore: DEFAULT_MIN_SCORE,
+    recencyBoost: DEFAULT_RECENCY_BOOST,
+    candidateMultiplier: DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
+    sessionsDeltaBytes: DEFAULT_SESSION_DELTA_BYTES,
+    sessionsDeltaMessages: DEFAULT_SESSION_DELTA_MESSAGES,
+  },
+  strategic: {
+    sessionMemory: true,
+    defaultSources: ["memory", "sessions"],
+    maxResults: 8,
+    minScore: 0.3,
+    recencyBoost: 0.22,
+    candidateMultiplier: 6,
+    sessionsDeltaBytes: 40_000,
+    sessionsDeltaMessages: 20,
+  },
+};
 
 function normalizeSources(
   sources: Array<"memory" | "sessions"> | undefined,
   sessionMemoryEnabled: boolean,
+  fallbackSources: Array<"memory" | "sessions">,
 ): Array<"memory" | "sessions"> {
   const normalized = new Set<"memory" | "sessions">();
-  const input = sources?.length ? sources : DEFAULT_SOURCES;
+  const input = sources?.length ? sources : fallbackSources;
   for (const source of input) {
     if (source === "memory") {
       normalized.add("memory");
@@ -104,6 +156,14 @@ function normalizeSources(
     normalized.add("memory");
   }
   return Array.from(normalized);
+}
+
+function normalizeStrategy(value?: string): MemorySearchStrategy {
+  const raw = value?.trim().toLowerCase();
+  if (raw === "lite" || raw === "balanced" || raw === "strategic") {
+    return raw;
+  }
+  return DEFAULT_STRATEGY;
 }
 
 function resolveStorePath(agentId: string, raw?: string): string {
@@ -122,8 +182,12 @@ function mergeConfig(
   agentId: string,
 ): ResolvedMemorySearchConfig {
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
+  const strategy = normalizeStrategy(overrides?.strategy ?? defaults?.strategy);
+  const strategyDefaults = STRATEGY_DEFAULTS[strategy];
   const sessionMemory =
-    overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
+    overrides?.experimental?.sessionMemory ??
+    defaults?.experimental?.sessionMemory ??
+    strategyDefaults.sessionMemory;
   const provider = overrides?.provider ?? defaults?.provider ?? "auto";
   const defaultRemote = defaults?.remote;
   const overrideRemote = overrides?.remote;
@@ -169,7 +233,11 @@ function mergeConfig(
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
     modelCacheDir: overrides?.local?.modelCacheDir ?? defaults?.local?.modelCacheDir,
   };
-  const sources = normalizeSources(overrides?.sources ?? defaults?.sources, sessionMemory);
+  const sources = normalizeSources(
+    overrides?.sources ?? defaults?.sources,
+    sessionMemory,
+    strategyDefaults.defaultSources,
+  );
   const rawPaths = [...(defaults?.extraPaths ?? []), ...(overrides?.extraPaths ?? [])]
     .map((value) => value.trim())
     .filter(Boolean);
@@ -201,16 +269,21 @@ function mergeConfig(
       deltaBytes:
         overrides?.sync?.sessions?.deltaBytes ??
         defaults?.sync?.sessions?.deltaBytes ??
-        DEFAULT_SESSION_DELTA_BYTES,
+        strategyDefaults.sessionsDeltaBytes,
       deltaMessages:
         overrides?.sync?.sessions?.deltaMessages ??
         defaults?.sync?.sessions?.deltaMessages ??
-        DEFAULT_SESSION_DELTA_MESSAGES,
+        strategyDefaults.sessionsDeltaMessages,
     },
   };
   const query = {
-    maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
-    minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
+    maxResults:
+      overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? strategyDefaults.maxResults,
+    minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? strategyDefaults.minScore,
+    recencyBoost:
+      overrides?.query?.recencyBoost ??
+      defaults?.query?.recencyBoost ??
+      strategyDefaults.recencyBoost,
   };
   const hybrid = {
     enabled:
@@ -228,7 +301,7 @@ function mergeConfig(
     candidateMultiplier:
       overrides?.query?.hybrid?.candidateMultiplier ??
       defaults?.query?.hybrid?.candidateMultiplier ??
-      DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
+      strategyDefaults.candidateMultiplier,
   };
   const cache = {
     enabled: overrides?.cache?.enabled ?? defaults?.cache?.enabled ?? DEFAULT_CACHE_ENABLED,
@@ -237,6 +310,7 @@ function mergeConfig(
 
   const overlap = clampNumber(chunking.overlap, 0, Math.max(0, chunking.tokens - 1));
   const minScore = clampNumber(query.minScore, 0, 1);
+  const recencyBoost = clampNumber(query.recencyBoost, 0, 1);
   const vectorWeight = clampNumber(hybrid.vectorWeight, 0, 1);
   const textWeight = clampNumber(hybrid.textWeight, 0, 1);
   const sum = vectorWeight + textWeight;
@@ -247,6 +321,7 @@ function mergeConfig(
   const deltaMessages = clampInt(sync.sessions.deltaMessages, 0, Number.MAX_SAFE_INTEGER);
   return {
     enabled,
+    strategy,
     sources,
     extraPaths,
     provider,
@@ -269,6 +344,7 @@ function mergeConfig(
     query: {
       ...query,
       minScore,
+      recencyBoost,
       hybrid: {
         enabled: Boolean(hybrid.enabled),
         vectorWeight: normalizedVectorWeight,
