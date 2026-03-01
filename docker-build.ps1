@@ -25,16 +25,54 @@ if (Test-Path $envFile) {
 }
 $rootDir = $PSScriptRoot
 
-if (-not $env:OPENCLAW_IMAGE) { $env:OPENCLAW_IMAGE = "openclaw:local" }
-if (-not $env:OPENCLAW_DOCKER_APT_PACKAGES) { $env:OPENCLAW_DOCKER_APT_PACKAGES = "" }
+# Voice/image presets:
+# - voice-lite (default): small voice-capable image (ffmpeg only, no bundled offline STT/TTS models)
+# - voice-full: heavier image with python/pip for faster-whisper and optional Piper
+if (-not $env:OPENCLAW_VOICE_PROFILE) { $env:OPENCLAW_VOICE_PROFILE = "voice-lite" }
+
+$profile = $env:OPENCLAW_VOICE_PROFILE.ToLowerInvariant()
+if (($profile -ne "voice-lite") -and ($profile -ne "voice-full")) {
+    throw "Unsupported OPENCLAW_VOICE_PROFILE '$($env:OPENCLAW_VOICE_PROFILE)'. Use 'voice-lite' or 'voice-full'."
+}
+
+if (-not $env:OPENCLAW_IMAGE) { $env:OPENCLAW_IMAGE = "openclaw:audio" }
+
+# If caller did not explicitly set OPENCLAW_DOCKER_APT_PACKAGES, choose profile defaults.
+if ([string]::IsNullOrEmpty($env:OPENCLAW_DOCKER_APT_PACKAGES)) {
+    if ($profile -eq "voice-full") {
+        $env:OPENCLAW_DOCKER_APT_PACKAGES = "ffmpeg python3 python3-pip"
+    } else {
+        $env:OPENCLAW_DOCKER_APT_PACKAGES = "ffmpeg"
+    }
+}
+
+# Piper defaults can be overridden via env.
+# voice-lite: disable Piper
+# voice-full: enable Piper binary, keep voice model optional/off by default
+if ([string]::IsNullOrEmpty($env:OPENCLAW_INSTALL_PIPER)) {
+    $env:OPENCLAW_INSTALL_PIPER = if ($profile -eq "voice-full") { "1" } else { "0" }
+}
+if ([string]::IsNullOrEmpty($env:OPENCLAW_INSTALL_PIPER_VOICE)) {
+    $env:OPENCLAW_INSTALL_PIPER_VOICE = "0"
+}
 
 $dockerArgs = @(
     "build",
     "--build-arg", "OPENCLAW_DOCKER_APT_PACKAGES=$env:OPENCLAW_DOCKER_APT_PACKAGES",
+    "--build-arg", "INSTALL_PIPER=$env:OPENCLAW_INSTALL_PIPER",
+    "--build-arg", "INSTALL_PIPER_VOICE=$env:OPENCLAW_INSTALL_PIPER_VOICE",
     "-t", $env:OPENCLAW_IMAGE,
     "-f", (Join-Path $rootDir "Dockerfile"),
     $rootDir
 )
 
+Write-Host "Building profile: $profile"
+Write-Host "Image tag: $($env:OPENCLAW_IMAGE)"
+Write-Host "APT packages: $($env:OPENCLAW_DOCKER_APT_PACKAGES)"
+Write-Host "INSTALL_PIPER: $($env:OPENCLAW_INSTALL_PIPER)"
+Write-Host "INSTALL_PIPER_VOICE: $($env:OPENCLAW_INSTALL_PIPER_VOICE)"
+
 & docker @dockerArgs
-#docker build -t openclaw:local -f Dockerfile . --build-arg OPENCLAW_DOCKER_APT_PACKAGES="ffmpeg python3 python3-pip"
+# Examples:
+# $env:OPENCLAW_VOICE_PROFILE="voice-lite"; .\docker-build.ps1
+# $env:OPENCLAW_VOICE_PROFILE="voice-full"; .\docker-build.ps1

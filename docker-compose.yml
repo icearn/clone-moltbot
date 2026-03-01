@@ -2,6 +2,7 @@ services:
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:audio}
     environment:
+      GATEWAY_MODE: local
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
