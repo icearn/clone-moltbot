@@ -141,7 +141,7 @@ export function listChunks(params: {
 export async function searchKeyword(params: {
   db: DatabaseSync;
   ftsTable: string;
-  providerModel: string;
+  providerModel: string | undefined;
   query: string;
   limit: number;
   snippetMaxChars: number;
@@ -157,18 +157,21 @@ export async function searchKeyword(params: {
     return [];
   }
 
+  // When providerModel is undefined (FTS-only mode), search all models
+  const modelClause = params.providerModel ? " AND model = ?" : "";
+  const modelParams = params.providerModel ? [params.providerModel] : [];
+
   const rows = params.db
     .prepare(
       `SELECT f.id, f.path, f.source, f.start_line, f.end_line, f.text,\n` +
         `       c.updated_at,\n` +
         `       bm25(${params.ftsTable}) AS rank\n` +
-        `  FROM ${params.ftsTable} f\n` +
-        `  JOIN chunks c ON c.id = f.id\n` +
-        ` WHERE ${params.ftsTable} MATCH ? AND f.model = ?${params.sourceFilter.sql}\n` +
+        `  FROM ${params.ftsTable}\n` +
+        ` WHERE ${params.ftsTable} MATCH ?${modelClause}${params.sourceFilter.sql}\n` +
         ` ORDER BY rank ASC\n` +
         ` LIMIT ?`,
     )
-    .all(ftsQuery, params.providerModel, ...params.sourceFilter.params, params.limit) as Array<{
+    .all(ftsQuery, ...modelParams, ...params.sourceFilter.params, params.limit) as Array<{
     id: string;
     path: string;
     source: SearchSource;
