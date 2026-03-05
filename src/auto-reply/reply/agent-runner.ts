@@ -55,6 +55,7 @@ import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
+import { buildModelSwitchNotice } from "./model-switch-notice.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
@@ -423,6 +424,13 @@ export async function runReplyAgent(params: {
       activeModel: modelUsed,
       attempts: fallbackAttempts,
       state: fallbackStateEntry,
+    });
+    const modelSwitchNotice = buildModelSwitchNotice({
+      requestedProvider: selectedProvider,
+      requestedModel: selectedModel,
+      usedProvider: providerUsed,
+      usedModel: modelUsed,
+      attempts: fallbackAttempts,
     });
     if (fallbackTransition.stateChanged) {
       if (fallbackStateEntry) {

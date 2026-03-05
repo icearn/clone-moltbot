@@ -675,10 +675,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       sources: Array.from(this.sources),
       extraPaths: this.settings.extraPaths,
       sourceCounts,
-      custom: {
-        strategy: this.settings.strategy,
-        recencyBoost: this.settings.query.recencyBoost,
-      },
       cache: this.cache.enabled
         ? {
             enabled: true,
@@ -718,6 +714,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         lastProvider: this.batchFailureLastProvider,
       },
       custom: {
+        strategy: this.settings.strategy,
+        recencyBoost: this.settings.query.recencyBoost,
         searchMode,
         providerUnavailableReason: this.providerUnavailableReason,
         readonlyRecovery: {

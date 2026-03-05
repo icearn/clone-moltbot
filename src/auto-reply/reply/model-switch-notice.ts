@@ -1,11 +1,9 @@
-import type { FallbackAttempt } from "../../agents/model-fallback.js";
-
 type ModelSwitchNoticeParams = {
   requestedProvider?: string;
   requestedModel?: string;
   usedProvider?: string;
   usedModel?: string;
-  attempts?: FallbackAttempt[];
+  attempts?: Array<{ reason?: string }>;
 };
 
 function normalizeRef(provider?: string, model?: string): string {
