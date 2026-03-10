@@ -112,7 +112,13 @@ ENV NODE_ENV=production
 
 
 # 1. Install dependencies as root
-RUN apt-get update && apt-get install -y sudo git curl procps && \
+# - sudo (configured for passwordless apt/dpkg for the `node` user)
+# - python3 + pip for running local backtests inside the container
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    sudo git curl procps \
+    python3 python3-pip python3-venv build-essential && \
+    echo 'node ALL=(ALL) NOPASSWD:/usr/bin/apt-get,/usr/bin/apt,/usr/bin/dpkg' > /etc/sudoers.d/node-nopasswd && \
+    chmod 440 /etc/sudoers.d/node-nopasswd && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 # 2. Create the Homebrew directory and give ownership to the 'node' user

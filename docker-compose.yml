@@ -13,6 +13,8 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      # Shared autotrading artifacts (screenshots/logs)
+      - autotrading_outputs:/home/node/autotrading-outputs:rw
       ## Uncomment the lines below to enable sandbox isolation
       ## (agents.defaults.sandbox). Requires Docker CLI in the image
       ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
@@ -48,6 +50,8 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+    networks:
+      - shared-net
 
   openclaw-cli:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
@@ -69,9 +73,18 @@ services:
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - autotrading_outputs:/home/node/autotrading-outputs:rw
     stdin_open: true
     tty: true
     init: true
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
+
+volumes:
+  autotrading_outputs:
+    external: true
+
+networks:
+  shared-net:
+    external: true
