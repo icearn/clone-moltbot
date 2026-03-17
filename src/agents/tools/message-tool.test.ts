@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChannelPlugin } from "../../channels/plugins/types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
+import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
@@ -7,6 +8,11 @@ import { createMessageTool } from "./message-tool.js";
 
 const mocks = vi.hoisted(() => ({
   runMessageAction: vi.fn(),
+  loadConfig: vi.fn(() => ({})),
+  resolveCommandSecretRefsViaGateway: vi.fn(async ({ config }: { config: unknown }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+  })),
 }));
 
 vi.mock("../../infra/outbound/message-action-runner.js", async () => {
@@ -18,6 +24,18 @@ vi.mock("../../infra/outbound/message-action-runner.js", async () => {
     runMessageAction: mocks.runMessageAction,
   };
 });
+
+vi.mock("../../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: mocks.loadConfig,
+  };
+});
+
+vi.mock("../../cli/command-secret-gateway.js", () => ({
+  resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
+}));
 
 function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
   mocks.runMessageAction.mockClear();
@@ -40,15 +58,26 @@ function getActionEnum(properties: Record<string, unknown>) {
   return (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
 }
 
+beforeEach(() => {
+  mocks.runMessageAction.mockReset();
+  mocks.loadConfig.mockReset().mockReturnValue({});
+  mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
+    resolvedConfig: config,
+    diagnostics: [],
+  }));
+});
+
 function createChannelPlugin(params: {
   id: string;
   label: string;
   docsPath: string;
   blurb: string;
-  actions: string[];
-  supportsButtons?: boolean;
+  actions?: ChannelMessageActionName[];
+  listActions?: NonNullable<NonNullable<ChannelPlugin["actions"]>["listActions"]>;
+  capabilities?: readonly ChannelMessageCapability[];
   messaging?: ChannelPlugin["messaging"];
 }): ChannelPlugin {
+  const actionCapabilities = params.capabilities;
   return {
     id: params.id as ChannelPlugin["id"],
     meta: {
@@ -65,8 +94,14 @@ function createChannelPlugin(params: {
     },
     ...(params.messaging ? { messaging: params.messaging } : {}),
     actions: {
-      listActions: () => params.actions as never,
-      ...(params.supportsButtons ? { supportsButtons: () => true } : {}),
+      listActions:
+        params.listActions ??
+        (() => {
+          return (params.actions ?? []) as never;
+        }),
+      ...(actionCapabilities
+        ? { getCapabilities: (_params: { cfg: unknown }) => actionCapabilities }
+        : {}),
     },
   };
 }
@@ -91,6 +126,49 @@ async function executeSend(params: {
       }
     | undefined;
 }
+
+describe("message tool secret scoping", () => {
+  it("scopes command-time secret resolution to the selected channel/account", async () => {
+    mockSendResult({ channel: "discord", to: "discord:123" });
+    mocks.loadConfig.mockReturnValue({
+      channels: {
+        discord: {
+          token: { source: "env", provider: "default", id: "DISCORD_TOKEN" },
+          accounts: {
+            ops: { token: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" } },
+            chat: { token: { source: "env", provider: "default", id: "DISCORD_CHAT_TOKEN" } },
+          },
+        },
+        slack: {
+          botToken: { source: "env", provider: "default", id: "SLACK_BOT_TOKEN" },
+        },
+      },
+    });
+
+    const tool = createMessageTool({
+      currentChannelProvider: "discord",
+      agentAccountId: "ops",
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      target: "channel:123",
+      message: "hi",
+    });
+
+    const secretResolveCall = mocks.resolveCommandSecretRefsViaGateway.mock.calls[0]?.[0] as {
+      targetIds?: Set<string>;
+      allowedPaths?: Set<string>;
+    };
+    expect(secretResolveCall.targetIds).toBeInstanceOf(Set);
+    expect(
+      [...(secretResolveCall.targetIds ?? [])].every((id) => id.startsWith("channels.discord.")),
+    ).toBe(true);
+    expect(secretResolveCall.allowedPaths).toEqual(
+      new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
+    );
+  });
+});
 
 describe("message tool agent routing", () => {
   it("derives agentId from the session key", async () => {
@@ -139,8 +217,8 @@ describe("message tool schema scoping", () => {
     label: "Telegram",
     docsPath: "/channels/telegram",
     blurb: "Telegram test plugin.",
-    actions: ["send", "react"],
-    supportsButtons: true,
+    actions: ["send", "react", "poll"],
+    capabilities: ["interactive", "buttons"],
   });
 
   const discordPlugin = createChannelPlugin({
@@ -149,6 +227,16 @@ describe("message tool schema scoping", () => {
     docsPath: "/channels/discord",
     blurb: "Discord test plugin.",
     actions: ["send", "poll", "poll-vote"],
+    capabilities: ["interactive", "components"],
+  });
+
+  const slackPlugin = createChannelPlugin({
+    id: "slack",
+    label: "Slack",
+    docsPath: "/channels/slack",
+    blurb: "Slack test plugin.",
+    actions: ["send", "react"],
+    capabilities: ["interactive", "blocks"],
   });
 
   afterEach(() => {
@@ -159,24 +247,46 @@ describe("message tool schema scoping", () => {
     {
       provider: "telegram",
       expectComponents: false,
+      expectBlocks: false,
       expectButtons: true,
       expectButtonStyle: true,
+      expectTelegramPollExtras: true,
       expectedActions: ["send", "react", "poll", "poll-vote"],
     },
     {
       provider: "discord",
       expectComponents: true,
+      expectBlocks: false,
       expectButtons: false,
       expectButtonStyle: false,
+      expectTelegramPollExtras: true,
       expectedActions: ["send", "poll", "poll-vote", "react"],
+    },
+    {
+      provider: "slack",
+      expectComponents: false,
+      expectBlocks: true,
+      expectButtons: false,
+      expectButtonStyle: false,
+      expectTelegramPollExtras: true,
+      expectedActions: ["send", "react", "poll", "poll-vote"],
     },
   ])(
     "scopes schema fields for $provider",
-    ({ provider, expectComponents, expectButtons, expectButtonStyle, expectedActions }) => {
+    ({
+      provider,
+      expectComponents,
+      expectBlocks,
+      expectButtons,
+      expectButtonStyle,
+      expectTelegramPollExtras,
+      expectedActions,
+    }) => {
       setActivePluginRegistry(
         createTestRegistry([
           { pluginId: "telegram", source: "test", plugin: telegramPlugin },
           { pluginId: "discord", source: "test", plugin: discordPlugin },
+          { pluginId: "slack", source: "test", plugin: slackPlugin },
         ]),
       );
 
@@ -191,6 +301,11 @@ describe("message tool schema scoping", () => {
         expect(properties.components).toBeDefined();
       } else {
         expect(properties.components).toBeUndefined();
+      }
+      if (expectBlocks) {
+        expect(properties.blocks).toBeDefined();
+      } else {
+        expect(properties.blocks).toBeUndefined();
       }
       if (expectButtons) {
         expect(properties.buttons).toBeDefined();
@@ -209,11 +324,75 @@ describe("message tool schema scoping", () => {
       for (const action of expectedActions) {
         expect(actionEnum).toContain(action);
       }
+      if (expectTelegramPollExtras) {
+        expect(properties.pollDurationSeconds).toBeDefined();
+        expect(properties.pollAnonymous).toBeDefined();
+        expect(properties.pollPublic).toBeDefined();
+      } else {
+        expect(properties.pollDurationSeconds).toBeUndefined();
+        expect(properties.pollAnonymous).toBeUndefined();
+        expect(properties.pollPublic).toBeUndefined();
+      }
       expect(properties.pollId).toBeDefined();
       expect(properties.pollOptionIndex).toBeDefined();
       expect(properties.pollOptionId).toBeDefined();
     },
   );
+
+  it("includes poll in the action enum when the current channel supports poll actions", () => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const actionEnum = getActionEnum(getToolProperties(tool));
+
+    expect(actionEnum).toContain("poll");
+  });
+
+  it("hides telegram poll extras when telegram polls are disabled in scoped mode", () => {
+    const telegramPluginWithConfig = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram test plugin.",
+      listActions: ({ cfg }) => {
+        const telegramCfg = (cfg as { channels?: { telegram?: { actions?: { poll?: boolean } } } })
+          .channels?.telegram;
+        return telegramCfg?.actions?.poll === false ? ["send", "react"] : ["send", "react", "poll"];
+      },
+      capabilities: ["interactive", "buttons"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([
+        { pluginId: "telegram", source: "test", plugin: telegramPluginWithConfig },
+      ]),
+    );
+
+    const tool = createMessageTool({
+      config: {
+        channels: {
+          telegram: {
+            actions: {
+              poll: false,
+            },
+          },
+        },
+      } as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties = getToolProperties(tool);
+    const actionEnum = getActionEnum(properties);
+
+    expect(actionEnum).not.toContain("poll");
+    expect(properties.pollDurationSeconds).toBeUndefined();
+    expect(properties.pollAnonymous).toBeUndefined();
+    expect(properties.pollPublic).toBeUndefined();
+  });
 });
 
 describe("message tool description", () => {
