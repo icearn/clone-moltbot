@@ -7,6 +7,7 @@ import {
   isOllamaCompatProvider,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
+  resolveCodingEnhancePrompt,
   resolveOllamaCompatNumCtxEnabled,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
@@ -161,6 +162,29 @@ describe("composeSystemPromptWithHookContext", () => {
         appendSystemContext: "  append only  ",
       }),
     ).toBe("append only");
+  });
+});
+
+describe("resolveCodingEnhancePrompt", () => {
+  it("leaves ordinary prompts unchanged", () => {
+    expect(resolveCodingEnhancePrompt("fix the bug")).toEqual({
+      enabled: false,
+      prompt: "fix the bug",
+    });
+  });
+
+  it("strips /coding enhance and enables the prompt flag", () => {
+    expect(resolveCodingEnhancePrompt("please fix this /coding enhance today")).toEqual({
+      enabled: true,
+      prompt: "please fix this today",
+    });
+  });
+
+  it("collapses extra whitespace after removing repeated flags", () => {
+    expect(resolveCodingEnhancePrompt("/coding enhance\n\nupdate docs  /coding enhance")).toEqual({
+      enabled: true,
+      prompt: "update docs",
+    });
   });
 });
 
