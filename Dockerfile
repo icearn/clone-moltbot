@@ -177,7 +177,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
 # Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
 # Must run after node_modules COPY so playwright-core is available.
-ARG OPENCLAW_INSTALL_BROWSER=""
+ARG OPENCLAW_INSTALL_BROWSER="1"
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
@@ -236,7 +236,19 @@ ENV NODE_ENV=production
 # - python3 + pip for running local backtests inside the container
 RUN apt-get update && apt-get install -y --no-install-recommends \
     sudo git curl procps \
-    python3 python3-pip python3-venv build-essential && \
+    python3 python3-pip python3-venv build-essential \
+    bash \
+    ca-certificates \
+    chromium \
+    curl \
+    fonts-liberation \
+    fonts-noto-color-emoji \
+    jq \
+    novnc \
+    socat \
+    websockify \
+    x11vnc \
+    xvfb && \
     echo 'node ALL=(ALL) NOPASSWD:/usr/bin/apt-get,/usr/bin/apt,/usr/bin/dpkg' > /etc/sudoers.d/node-nopasswd && \
     chmod 440 /etc/sudoers.d/node-nopasswd && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
