@@ -258,6 +258,7 @@ RUN mkdir -p /home/linuxbrew/.linuxbrew && \
     chown -R node:node /home/linuxbrew/.linuxbrew
 # (Continue with your chown or other node-user tasks...)
 RUN chown -R node:node /app /home/node /tmp
+RUN mkdir -p /home/node/.npm && chown -R node:node /home/node/.npm
 
 # 3. Switch to the non-root user for the Homebrew installation
 USER node
