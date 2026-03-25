@@ -202,7 +202,11 @@ COPY --chown=node:node scripts ./scripts
 USER node
 # Reduce OOM risk on low-memory hosts during dependency installation.
 # Docker builds on small VMs may otherwise fail with "Killed" (exit 137).
-RUN NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
+# Run in CI mode so pnpm can safely manage node_modules in non-TTY Docker builds.
+RUN CI=true NODE_OPTIONS=--max-old-space-size=2048 pnpm install --frozen-lockfile
+
+# Subsequent steps install system packages and require root.
+USER root
 
 # Optionally install Chromium and Xvfb for browser automation.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
