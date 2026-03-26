@@ -38,7 +38,7 @@ import {
   isAudioPayload,
   signalTypingIfNeeded,
 } from "./agent-runner-helpers.js";
-import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
+import { runMemoryFlushIfNeeded, runPreflightCompactionIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import {
   appendUnscheduledReminderNote,
@@ -256,6 +256,19 @@ export async function runReplyAgent(params: {
   }
 
   await typingSignals.signalRunStart();
+
+  activeSessionEntry = await runPreflightCompactionIfNeeded({
+    cfg,
+    followupRun,
+    promptForEstimate: followupRun.prompt,
+    defaultModel,
+    agentCfgContextTokens,
+    sessionEntry: activeSessionEntry,
+    sessionStore: activeSessionStore,
+    sessionKey,
+    storePath,
+    isHeartbeat,
+  });
 
   activeSessionEntry = await runMemoryFlushIfNeeded({
     cfg,
