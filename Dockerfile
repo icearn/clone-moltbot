@@ -291,12 +291,51 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # 2. Create the Homebrew directory and give ownership to the 'node' user
 RUN mkdir -p /home/linuxbrew/.linuxbrew && \
     chown -R node:node /home/linuxbrew/.linuxbrew
-# (Continue with your chown or other node-user tasks...)
-RUN chown -R node:node /app /home/node /tmp
-RUN mkdir -p /home/node/.npm && chown -R node:node /home/node/.npm
+# Avoid recursive chown over large caches (for example Playwright) which can
+# make this step appear stuck during build.
+RUN chown node:node /app && \
+    install -d -o node -g node /home/node/.npm /home/node/.openclaw && \
+    chmod 1777 /tmp
 
 # 3. Switch to the non-root user for the Homebrew installation
 USER node
+
+# Optionally preinstall external plugins at image build time.
+# Example: --build-arg OPENCLAW_DOCKER_PLUGINS="memory-lancedb-pro@beta"
+ARG OPENCLAW_DOCKER_PLUGINS=""
+ARG OPENCLAW_DOCKER_PLUGIN_INSTALL_SCRIPTS="0"
+RUN if [ -n "$OPENCLAW_DOCKER_PLUGINS" ]; then \
+      mkdir -p /home/node/.openclaw/extensions; \
+      for plugin in $OPENCLAW_DOCKER_PLUGINS; do \
+        echo "Preloading OpenClaw plugin package: $plugin"; \
+        tmp_dir="$(mktemp -d)"; \
+        tarball="$(npm pack "$plugin" --pack-destination "$tmp_dir" --silent | tail -n 1)"; \
+        unpack_dir="$tmp_dir/unpack"; \
+        mkdir -p "$unpack_dir"; \
+        tar -xzf "$tmp_dir/$tarball" -C "$unpack_dir"; \
+        if [ -f "$unpack_dir/package/openclaw.plugin.json" ]; then \
+          plugin_id="$(node -p "JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')).id || ''" "$unpack_dir/package/openclaw.plugin.json")"; \
+        else \
+          plugin_id="$(node -p "const spec=process.argv[1]; const at=spec.lastIndexOf('@'); const name=(at>0?spec.slice(0,at):spec).replace(/^@[^/]+\\//,''); name" "$plugin")"; \
+        fi; \
+        if [ -z "$plugin_id" ]; then \
+          echo "ERROR: unable to resolve plugin id for $plugin" >&2; \
+          exit 1; \
+        fi; \
+        dest="/home/node/.openclaw/extensions/$plugin_id"; \
+        rm -rf "$dest"; \
+        mkdir -p "$dest"; \
+        cp -a "$unpack_dir/package/." "$dest/"; \
+        if [ -f "$dest/package.json" ]; then \
+          if [ "$OPENCLAW_DOCKER_PLUGIN_INSTALL_SCRIPTS" = "1" ]; then \
+            (cd "$dest" && CI=true npm install --omit=dev --no-audit --no-fund); \
+          else \
+            (cd "$dest" && CI=true npm install --omit=dev --ignore-scripts --no-audit --no-fund); \
+          fi; \
+        fi; \
+        rm -rf "$tmp_dir"; \
+      done; \
+    fi
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.
