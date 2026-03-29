@@ -138,3 +138,6 @@ docker-compose.self-edit.yml
 
 # Deprecated changelog fragment workflow
 changelog/fragments/
+
+# Local scratch workspace
+.tmp/

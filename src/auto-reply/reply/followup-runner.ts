@@ -9,6 +9,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import type { FallbackAttempt } from "../../agents/model-fallback.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { recordRunReinforcement } from "../../agents/reinforcement-ledger.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -296,6 +297,11 @@ export function createFollowupRunner(params: {
           providerUsed: fallbackProvider,
           contextTokensUsed,
           systemPromptReport: runResult.meta?.systemPromptReport,
+          cliSessionBinding: runResult.meta?.agentMeta?.cliSessionBinding,
+          usageIsContextSnapshot: isCliProvider(
+            fallbackProvider ?? queued.run.provider,
+            queued.run.config,
+          ),
           logLabel: "followup",
         });
       }
