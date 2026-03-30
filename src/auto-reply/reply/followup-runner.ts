@@ -7,7 +7,7 @@ import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import type { FallbackAttempt } from "../../agents/model-fallback.js";
+import type { FallbackAttempt } from "../../agents/model-fallback.types.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
@@ -157,6 +157,7 @@ export function createFollowupRunner(params: {
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
       let fallbackProvider = queued.run.provider;
       let fallbackModel = queued.run.model;
+      let fallbackAttempts: FallbackAttempt[] = [];
       let activeSessionEntry =
         (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
       activeSessionEntry = await runPreflightCompactionIfNeeded({
@@ -419,6 +420,10 @@ export function createFollowupRunner(params: {
         successfulReply: finalPayloads.length > 0,
         modelSwitchNotice,
         fallbackRecovered: fallbackAttempts.length > 0,
+        source: "followup-runner",
+        replyTexts: finalPayloads
+          .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
+          .filter((text) => text.length > 0),
       }).catch(() => {});
     } finally {
       // Both signals are required for the typing controller to clean up.

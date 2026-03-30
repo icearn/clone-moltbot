@@ -29,6 +29,7 @@ import {
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import { resolveToolCallArgumentsEncoding } from "../../../plugins/provider-model-compat.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
@@ -218,6 +219,25 @@ export {
 } from "./attempt.tool-call-normalization.js";
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
+
+const CODING_ENHANCE_FLAG_REGEX = /\/coding\s+enhance\b/gi;
+const CODING_ENHANCE_SYSTEM_PROMPT =
+  "Coding-enhance mode is active. Prefer concrete implementation and verification over planning-only responses.";
+
+export function resolveCodingEnhancePrompt(prompt: string): { enabled: boolean; prompt: string } {
+  let enabled = false;
+  const stripped = prompt.replace(CODING_ENHANCE_FLAG_REGEX, () => {
+    enabled = true;
+    return " ";
+  });
+  if (!enabled) {
+    return { enabled: false, prompt };
+  }
+  return {
+    enabled: true,
+    prompt: stripped.replace(/\s+/g, " ").trim(),
+  };
+}
 
 export function resolveEmbeddedAgentStreamFn(params: {
   currentStreamFn: StreamFn | undefined;

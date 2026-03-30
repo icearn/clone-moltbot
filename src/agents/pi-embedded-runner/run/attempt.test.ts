@@ -21,6 +21,7 @@ import {
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
+  resolveCodingEnhancePrompt,
   stripSessionsYieldArtifacts,
   shouldInjectHeartbeatPrompt,
   decodeHtmlEntitiesInObject,

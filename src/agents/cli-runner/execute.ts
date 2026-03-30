@@ -28,6 +28,30 @@ import {
 } from "./log.js";
 import type { PreparedCliRunContext } from "./types.js";
 
+type CliRunnerExecuteTestDeps = {
+  getProcessSupervisor: typeof getProcessSupervisor;
+  enqueueSystemEvent: typeof enqueueSystemEvent;
+  requestHeartbeatNow: typeof requestHeartbeatNow;
+};
+
+const cliRunnerExecuteTestDeps: CliRunnerExecuteTestDeps = {
+  getProcessSupervisor,
+  enqueueSystemEvent,
+  requestHeartbeatNow,
+};
+
+export function setCliRunnerExecuteTestDeps(overrides: Partial<CliRunnerExecuteTestDeps>): void {
+  if (overrides.getProcessSupervisor) {
+    cliRunnerExecuteTestDeps.getProcessSupervisor = overrides.getProcessSupervisor;
+  }
+  if (overrides.enqueueSystemEvent) {
+    cliRunnerExecuteTestDeps.enqueueSystemEvent = overrides.enqueueSystemEvent;
+  }
+  if (overrides.requestHeartbeatNow) {
+    cliRunnerExecuteTestDeps.requestHeartbeatNow = overrides.requestHeartbeatNow;
+  }
+}
+
 function buildCliLogArgs(params: {
   args: string[];
   systemPromptArg?: string;
@@ -169,7 +193,7 @@ export async function executePreparedCliRun(
         timeoutMs: params.timeoutMs,
         useResume,
       });
-      const supervisor = getProcessSupervisor();
+      const supervisor = cliRunnerExecuteTestDeps.getProcessSupervisor();
       const scopeKey = buildCliSupervisorScopeKey({
         backend,
         backendId: context.backendResolved.id,
@@ -222,8 +246,8 @@ export async function executePreparedCliRun(
               "It may have been waiting for interactive input or an approval prompt.",
               "For Claude Code, prefer --permission-mode bypassPermissions --print.",
             ].join(" ");
-            enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
-            requestHeartbeatNow(
+            cliRunnerExecuteTestDeps.enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
+            cliRunnerExecuteTestDeps.requestHeartbeatNow(
               scopedHeartbeatWakeOptions(params.sessionKey, { reason: "cli:watchdog:stall" }),
             );
           }

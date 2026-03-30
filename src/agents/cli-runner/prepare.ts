@@ -22,6 +22,25 @@ import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
+type CliRunnerPrepareTestDeps = {
+  makeBootstrapWarn: typeof makeBootstrapWarn;
+  resolveBootstrapContextForRun: typeof resolveBootstrapContextForRun;
+};
+
+const cliRunnerPrepareTestDeps: CliRunnerPrepareTestDeps = {
+  makeBootstrapWarn,
+  resolveBootstrapContextForRun,
+};
+
+export function setCliRunnerPrepareTestDeps(overrides: Partial<CliRunnerPrepareTestDeps>): void {
+  if (overrides.makeBootstrapWarn) {
+    cliRunnerPrepareTestDeps.makeBootstrapWarn = overrides.makeBootstrapWarn;
+  }
+  if (overrides.resolveBootstrapContextForRun) {
+    cliRunnerPrepareTestDeps.resolveBootstrapContextForRun = overrides.resolveBootstrapContextForRun;
+  }
+}
+
 export async function prepareCliRunContext(
   params: RunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
@@ -74,12 +93,15 @@ export async function prepareCliRunContext(
   const modelDisplay = `${params.provider}/${modelId}`;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles } = await resolveBootstrapContextForRun({
+  const { bootstrapFiles, contextFiles } = await cliRunnerPrepareTestDeps.resolveBootstrapContextForRun({
     workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    warn: makeBootstrapWarn({ sessionLabel, warn: (message) => cliBackendLog.warn(message) }),
+    warn: cliRunnerPrepareTestDeps.makeBootstrapWarn({
+      sessionLabel,
+      warn: (message) => cliBackendLog.warn(message),
+    }),
   });
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);

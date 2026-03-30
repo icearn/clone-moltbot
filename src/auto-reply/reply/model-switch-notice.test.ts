@@ -8,7 +8,7 @@ describe("buildModelSwitchNotice", () => {
       requestedModel: "claude-opus-4-5",
       usedProvider: "anthropic",
       usedModel: "claude-opus-4-5",
-      attempts: [{ provider: "anthropic", model: "claude-opus-4-5", error: "timeout" }],
+      attempts: [{ reason: "timeout" }],
     });
     expect(notice).toBeUndefined();
   });
@@ -21,9 +21,6 @@ describe("buildModelSwitchNotice", () => {
       usedModel: "gpt-5-mini",
       attempts: [
         {
-          provider: "anthropic",
-          model: "claude-opus-4-5",
-          error: "429",
           reason: "rate_limit",
         },
       ],

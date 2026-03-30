@@ -797,6 +797,10 @@ export async function runReplyAgent(params: {
       successfulReply: finalPayloads.length > 0,
       modelSwitchNotice,
       fallbackRecovered: Boolean(fallbackAttempts && fallbackAttempts.length > 0),
+      source: "agent-runner",
+      replyTexts: finalPayloads
+        .map((payload) => (typeof payload.text === "string" ? payload.text : ""))
+        .filter((text) => text.length > 0),
     }).catch(() => {});
 
     return finalizeWithFollowup(
