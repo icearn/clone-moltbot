@@ -2,6 +2,7 @@ import {
   getChannelPlugin,
   listChannelPlugins,
   resolveChannelApprovalAdapter,
+  resolveChannelApprovalCapability,
 } from "../channels/plugins/index.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
@@ -42,11 +43,12 @@ export function resolveExecApprovalInitiatingSurfaceState(params: {
   }
 
   const cfg = params.cfg ?? loadConfig();
-  const state = resolveChannelApprovalAdapter(
+  const state = resolveChannelApprovalCapability(
     getChannelPlugin(channel),
-  )?.auth?.getInitiatingSurfaceState?.({
+  )?.getActionAvailabilityState?.({
     cfg,
     accountId: params.accountId,
+    action: "approve",
   });
   if (state) {
     return { ...state, channel, channelLabel };
