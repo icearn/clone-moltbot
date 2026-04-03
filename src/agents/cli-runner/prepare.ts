@@ -6,7 +6,10 @@ import {
   buildBootstrapTruncationReportMeta,
   analyzeBootstrapBudget,
 } from "../bootstrap-budget.js";
-import { makeBootstrapWarn, resolveBootstrapContextForRun } from "../bootstrap-files.js";
+import {
+  makeBootstrapWarn as makeBootstrapWarnImpl,
+  resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
+} from "../bootstrap-files.js";
 import { resolveCliBackendConfig } from "../cli-backends.js";
 import { hashCliSessionText, resolveCliSessionReuse } from "../cli-session.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
@@ -22,23 +25,13 @@ import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./types.js";
 
-type CliRunnerPrepareTestDeps = {
-  makeBootstrapWarn: typeof makeBootstrapWarn;
-  resolveBootstrapContextForRun: typeof resolveBootstrapContextForRun;
+const prepareDeps = {
+  makeBootstrapWarn: makeBootstrapWarnImpl,
+  resolveBootstrapContextForRun: resolveBootstrapContextForRunImpl,
 };
 
-const cliRunnerPrepareTestDeps: CliRunnerPrepareTestDeps = {
-  makeBootstrapWarn,
-  resolveBootstrapContextForRun,
-};
-
-export function setCliRunnerPrepareTestDeps(overrides: Partial<CliRunnerPrepareTestDeps>): void {
-  if (overrides.makeBootstrapWarn) {
-    cliRunnerPrepareTestDeps.makeBootstrapWarn = overrides.makeBootstrapWarn;
-  }
-  if (overrides.resolveBootstrapContextForRun) {
-    cliRunnerPrepareTestDeps.resolveBootstrapContextForRun = overrides.resolveBootstrapContextForRun;
-  }
+export function setCliRunnerPrepareTestDeps(overrides: Partial<typeof prepareDeps>): void {
+  Object.assign(prepareDeps, overrides);
 }
 
 export async function prepareCliRunContext(
@@ -93,12 +86,12 @@ export async function prepareCliRunContext(
   const modelDisplay = `${params.provider}/${modelId}`;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
-  const { bootstrapFiles, contextFiles } = await cliRunnerPrepareTestDeps.resolveBootstrapContextForRun({
+  const { bootstrapFiles, contextFiles } = await prepareDeps.resolveBootstrapContextForRun({
     workspaceDir,
     config: params.config,
     sessionKey: params.sessionKey,
     sessionId: params.sessionId,
-    warn: cliRunnerPrepareTestDeps.makeBootstrapWarn({
+    warn: prepareDeps.makeBootstrapWarn({
       sessionLabel,
       warn: (message) => cliBackendLog.warn(message),
     }),

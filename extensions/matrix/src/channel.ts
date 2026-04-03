@@ -35,6 +35,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { matrixMessageActions } from "./actions.js";
+import { matrixApprovalAuth } from "./approval-auth.js";
 import { MatrixConfigSchema } from "./config-schema.js";
 import {
   resolveMatrixGroupRequireMention,
@@ -54,9 +55,14 @@ import {
   resolveMatrixDirectUserId,
   resolveMatrixTargetIdentity,
 } from "./matrix/target-ids.js";
+import {
+  setMatrixThreadBindingIdleTimeoutBySessionKey,
+  setMatrixThreadBindingMaxAgeBySessionKey,
+} from "./matrix/thread-bindings-shared.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { resolveMatrixOutboundSessionRoute } from "./session-route.js";
 import { matrixSetupAdapter } from "./setup-core.js";
+import { matrixSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
@@ -149,6 +155,7 @@ const matrixConfigAdapter = createScopedChannelConfigAdapter<
     "name",
     "homeserver",
     "allowPrivateNetwork",
+    "proxy",
     "userId",
     "accessToken",
     "password",
@@ -283,6 +290,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
     base: {
       id: "matrix",
       meta,
+      setupWizard: matrixSetupWizard,
       capabilities: {
         chatTypes: ["direct", "group", "thread"],
         polls: true,
@@ -304,12 +312,53 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
             },
           }),
       },
+      auth: matrixApprovalAuth,
       groups: {
         resolveRequireMention: resolveMatrixGroupRequireMention,
         resolveToolPolicy: resolveMatrixGroupToolPolicy,
       },
       conversationBindings: {
         supportsCurrentConversationBinding: true,
+        setIdleTimeoutBySessionKey: ({ targetSessionKey, accountId, idleTimeoutMs }) =>
+          setMatrixThreadBindingIdleTimeoutBySessionKey({
+            targetSessionKey,
+            accountId: accountId ?? "",
+            idleTimeoutMs,
+          }).map((binding) => ({
+            boundAt: binding.boundAt,
+            lastActivityAt:
+              typeof binding.metadata?.lastActivityAt === "number"
+                ? binding.metadata.lastActivityAt
+                : binding.boundAt,
+            idleTimeoutMs:
+              typeof binding.metadata?.idleTimeoutMs === "number"
+                ? binding.metadata.idleTimeoutMs
+                : undefined,
+            maxAgeMs:
+              typeof binding.metadata?.maxAgeMs === "number"
+                ? binding.metadata.maxAgeMs
+                : undefined,
+          })),
+        setMaxAgeBySessionKey: ({ targetSessionKey, accountId, maxAgeMs }) =>
+          setMatrixThreadBindingMaxAgeBySessionKey({
+            targetSessionKey,
+            accountId: accountId ?? "",
+            maxAgeMs,
+          }).map((binding) => ({
+            boundAt: binding.boundAt,
+            lastActivityAt:
+              typeof binding.metadata?.lastActivityAt === "number"
+                ? binding.metadata.lastActivityAt
+                : binding.boundAt,
+            idleTimeoutMs:
+              typeof binding.metadata?.idleTimeoutMs === "number"
+                ? binding.metadata.idleTimeoutMs
+                : undefined,
+            maxAgeMs:
+              typeof binding.metadata?.maxAgeMs === "number"
+                ? binding.metadata.maxAgeMs
+                : undefined,
+          })),
       },
       messaging: {
         normalizeTarget: normalizeMatrixMessagingTarget,
@@ -393,6 +442,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount, MatrixProbe> =
               accountId: account.accountId,
               allowPrivateNetwork: auth.allowPrivateNetwork,
               ssrfPolicy: auth.ssrfPolicy,
+              dispatcherPolicy: auth.dispatcherPolicy,
             });
           } catch (err) {
             return {

@@ -1,6 +1,7 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
 import { parseTimeoutMs } from "../parse-timeout.js";
+import { callGatewayCli } from "./rpc.js";
 
 /**
  * Regression test for #12098:
@@ -18,9 +19,11 @@ import { parseTimeoutMs } from "../parse-timeout.js";
  * least approvalTimeoutMs + 10_000.
  */
 
-const callGatewaySpy = vi.fn<
-  (opts: Record<string, unknown>) => Promise<{ decision: "allow-once" }>
->(async () => ({ decision: "allow-once" }));
+const { callGatewaySpy } = vi.hoisted(() => ({
+  callGatewaySpy: vi.fn<(opts: Record<string, unknown>) => Promise<{ decision: "allow-once" }>>(
+    async () => ({ decision: "allow-once" }),
+  ),
+}));
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: callGatewaySpy,
@@ -32,11 +35,7 @@ vi.mock("../progress.js", () => ({
 }));
 
 describe("exec approval transport timeout (#12098)", () => {
-  let callGatewayCli: typeof import("./rpc.js").callGatewayCli;
-
-  beforeAll(async () => {
-    ({ callGatewayCli } = await import("./rpc.js"));
-  });
+  const approvalTransportFloorMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS + 10_000;
 
   beforeEach(() => {
     callGatewaySpy.mockClear();
@@ -55,10 +54,10 @@ describe("exec approval transport timeout (#12098)", () => {
   });
 
   it("fix: overriding transportTimeoutMs gives the approval enough transport time", async () => {
-    const approvalTimeoutMs = 120_000;
+    const approvalTimeoutMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
     // Mirror the production code: parseTimeoutMs(opts.timeout) ?? 0
-    const transportTimeoutMs = Math.max(parseTimeoutMs("35000") ?? 0, approvalTimeoutMs + 10_000);
-    expect(transportTimeoutMs).toBe(130_000);
+    const transportTimeoutMs = Math.max(parseTimeoutMs("35000") ?? 0, approvalTransportFloorMs);
+    expect(transportTimeoutMs).toBe(approvalTransportFloorMs);
 
     await callGatewayCli(
       "exec.approval.request",
@@ -70,18 +69,18 @@ describe("exec approval transport timeout (#12098)", () => {
     expect(callGatewaySpy).toHaveBeenCalledTimes(1);
     const callOpts = callGatewaySpy.mock.calls[0][0];
     expect(callOpts.timeoutMs).toBeGreaterThanOrEqual(approvalTimeoutMs);
-    expect(callOpts.timeoutMs).toBe(130_000);
+    expect(callOpts.timeoutMs).toBe(approvalTransportFloorMs);
   });
 
   it("fix: user-specified timeout larger than approval is preserved", async () => {
-    const approvalTimeoutMs = 120_000;
+    const approvalTimeoutMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
     const userTimeout = 200_000;
     // Mirror the production code: parseTimeoutMs preserves valid large values
     const transportTimeoutMs = Math.max(
       parseTimeoutMs(String(userTimeout)) ?? 0,
-      approvalTimeoutMs + 10_000,
+      approvalTransportFloorMs,
     );
-    expect(transportTimeoutMs).toBe(200_000);
+    expect(transportTimeoutMs).toBe(approvalTransportFloorMs);
 
     await callGatewayCli(
       "exec.approval.request",
@@ -91,15 +90,15 @@ describe("exec approval transport timeout (#12098)", () => {
     );
 
     const callOpts = callGatewaySpy.mock.calls[0][0];
-    expect(callOpts.timeoutMs).toBe(200_000);
+    expect(callOpts.timeoutMs).toBe(approvalTransportFloorMs);
   });
 
   it("fix: non-numeric timeout falls back to approval floor", async () => {
     const approvalTimeoutMs = DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
     // parseTimeoutMs returns undefined for garbage input, ?? 0 ensures
     // Math.max picks the approval floor instead of producing NaN
-    const transportTimeoutMs = Math.max(parseTimeoutMs("foo") ?? 0, approvalTimeoutMs + 10_000);
-    expect(transportTimeoutMs).toBe(approvalTimeoutMs + 10_000);
+    const transportTimeoutMs = Math.max(parseTimeoutMs("foo") ?? 0, approvalTransportFloorMs);
+    expect(transportTimeoutMs).toBe(approvalTransportFloorMs);
 
     await callGatewayCli(
       "exec.approval.request",
@@ -109,6 +108,6 @@ describe("exec approval transport timeout (#12098)", () => {
     );
 
     const callOpts = callGatewaySpy.mock.calls[0][0];
-    expect(callOpts.timeoutMs).toBe(approvalTimeoutMs + 10_000);
+    expect(callOpts.timeoutMs).toBe(approvalTransportFloorMs);
   });
 });
