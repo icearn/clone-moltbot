@@ -5,24 +5,29 @@ read_when:
 title: "Tlon"
 ---
 
-# Tlon (plugin)
-
 Tlon is a decentralized messenger built on Urbit. OpenClaw connects to your Urbit ship and can
 respond to DMs and group chat messages. Group replies require an @ mention by default and can
 be further restricted via allowlists.
 
-Status: supported via plugin. DMs, group mentions, thread replies, rich text formatting, and
+Status: bundled plugin. DMs, group mentions, thread replies, rich text formatting, and
 image uploads are supported. Reactions and polls are not yet supported.
 
-## Plugin required
+## Bundled plugin
 
-Tlon ships as a plugin and is not bundled with the core install.
+Tlon ships as a bundled plugin in current OpenClaw releases, so normal packaged
+builds do not need a separate install.
+
+If you are on an older build or a custom install that excludes Tlon, install a
+current npm package:
 
 Install via CLI (npm registry):
 
 ```bash
 openclaw plugins install @openclaw/tlon
 ```
+
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Local checkout (when running from a git repo):
 
@@ -34,7 +39,9 @@ Details: [Plugins](/tools/plugin)
 
 ## Setup
 
-1. Install the Tlon plugin.
+1. Ensure the Tlon plugin is available.
+   - Current packaged OpenClaw releases already bundle it.
+   - Older/custom installs can add it manually with the commands above.
 2. Gather your ship URL and login code.
 3. Configure `channels.tlon`.
 4. Restart the gateway.

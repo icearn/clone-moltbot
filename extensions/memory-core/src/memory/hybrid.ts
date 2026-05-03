@@ -5,12 +5,9 @@ import {
   DEFAULT_TEMPORAL_DECAY_CONFIG,
 } from "./temporal-decay.js";
 
-export type HybridSource = string;
+type HybridSource = string;
 
-export { type MMRConfig, DEFAULT_MMR_CONFIG };
-export { type TemporalDecayConfig, DEFAULT_TEMPORAL_DECAY_CONFIG };
-
-export type HybridVectorResult = {
+type HybridVectorResult = {
   id: string;
   path: string;
   startLine: number;
@@ -21,7 +18,7 @@ export type HybridVectorResult = {
   updatedAt?: number;
 };
 
-export type HybridKeywordResult = {
+type HybridKeywordResult = {
   id: string;
   path: string;
   startLine: number;
@@ -74,6 +71,8 @@ export async function mergeHybridResults(params: {
     startLine: number;
     endLine: number;
     score: number;
+    vectorScore: number;
+    textScore: number;
     snippet: string;
     source: HybridSource;
   }>
@@ -139,12 +138,16 @@ export async function mergeHybridResults(params: {
       startLine: entry.startLine,
       endLine: entry.endLine,
       score,
+      vectorScore: entry.vectorScore,
+      textScore: entry.textScore,
       snippet: entry.snippet,
       source: entry.source,
       updatedAt: entry.updatedAt,
     };
   });
 
+  // Keep component scores as raw retrieval diagnostics; temporal decay and MMR
+  // only adjust or reorder the combined ranking score.
   const temporalDecayConfig = { ...DEFAULT_TEMPORAL_DECAY_CONFIG, ...params.temporalDecay };
   const decayed = await applyTemporalDecayToHybridResults({
     results: merged,

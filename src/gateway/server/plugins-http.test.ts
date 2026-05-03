@@ -32,7 +32,7 @@ function createRoute(params: {
   return {
     pluginId: params.pluginId ?? "route",
     path: params.path,
-    auth: params.auth ?? "gateway",
+    auth: params.auth ?? "plugin",
     match: params.match ?? "exact",
     handler: params.handler ?? (() => {}),
     source: params.pluginId ?? "route",
@@ -72,7 +72,10 @@ function createSecurePluginRouteHandler(params: {
   });
 }
 
-async function invokeSecureGatewayRoute(params: { gatewayAuthSatisfied: boolean }) {
+async function invokeSecureGatewayRoute(params: {
+  gatewayAuthSatisfied: boolean;
+  gatewayRequestOperatorScopes?: readonly string[];
+}) {
   const exactPluginHandler = vi.fn(async () => false);
   const prefixGatewayHandler = vi.fn(async () => true);
   const handler = createSecurePluginRouteHandler({
@@ -84,7 +87,10 @@ async function invokeSecureGatewayRoute(params: { gatewayAuthSatisfied: boolean 
     { url: "/plugin/secure/report" } as IncomingMessage,
     res,
     undefined,
-    { gatewayAuthSatisfied: params.gatewayAuthSatisfied },
+    {
+      gatewayAuthSatisfied: params.gatewayAuthSatisfied,
+      gatewayRequestOperatorScopes: params.gatewayRequestOperatorScopes,
+    },
   );
   return { handled, exactPluginHandler, prefixGatewayHandler };
 }
@@ -93,6 +99,7 @@ async function invokeRouteAndCollectRuntimeScopes(params: {
   path: string;
   auth: "gateway" | "plugin";
   gatewayAuthSatisfied: boolean;
+  gatewayRequestOperatorScopes?: readonly string[];
 }) {
   let observedScopes: string[] | undefined;
   const handler = createGatewayPluginRequestHandler({
@@ -115,6 +122,7 @@ async function invokeRouteAndCollectRuntimeScopes(params: {
   const response = makeMockHttpResponse();
   const handled = await handler({ url: params.path } as IncomingMessage, response.res, undefined, {
     gatewayAuthSatisfied: params.gatewayAuthSatisfied,
+    gatewayRequestOperatorScopes: params.gatewayRequestOperatorScopes,
   });
   return { handled, observedScopes, ...response };
 }
@@ -137,16 +145,17 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(observedScopes).toEqual([]);
   });
 
-  it("keeps gateway-authenticated plugin routes on write runtime scopes", async () => {
+  it("preserves gateway-authenticated plugin route runtime scopes from request auth", async () => {
     const { handled, observedScopes, res } = await invokeRouteAndCollectRuntimeScopes({
       path: "/secure-hook",
       auth: "gateway",
       gatewayAuthSatisfied: true,
+      gatewayRequestOperatorScopes: ["operator.read"],
     });
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(observedScopes).toEqual(["operator.write"]);
+    expect(observedScopes).toEqual(["operator.read"]);
   });
 
   it("returns false when no routes are registered", async () => {
@@ -231,10 +240,20 @@ describe("createGatewayPluginRequestHandler", () => {
   it("allows gateway route fallthrough only after gateway auth succeeds", async () => {
     const { handled, exactPluginHandler, prefixGatewayHandler } = await invokeSecureGatewayRoute({
       gatewayAuthSatisfied: true,
+      gatewayRequestOperatorScopes: ["operator.write"],
     });
     expect(handled).toBe(true);
     expect(exactPluginHandler).toHaveBeenCalledTimes(1);
     expect(prefixGatewayHandler).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when gateway route dispatch lacks caller scopes", async () => {
+    const { handled, exactPluginHandler, prefixGatewayHandler } = await invokeSecureGatewayRoute({
+      gatewayAuthSatisfied: true,
+    });
+    expect(handled).toBe(false);
+    expect(exactPluginHandler).not.toHaveBeenCalled();
+    expect(prefixGatewayHandler).not.toHaveBeenCalled();
   });
 
   it("matches canonicalized route variants", async () => {
@@ -254,7 +273,7 @@ describe("createGatewayPluginRequestHandler", () => {
     expect(routeHandler).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the provided registry when the pinned route registry is empty", async () => {
+  it("does not fall back to stale routes when the pinned route registry is empty", async () => {
     const explicitRouteHandler = vi.fn(async (_req, res: ServerResponse) => {
       res.statusCode = 200;
       return true;
@@ -274,8 +293,8 @@ describe("createGatewayPluginRequestHandler", () => {
 
     const { res } = makeMockHttpResponse();
     const handled = await handler({ url: "/demo" } as IncomingMessage, res);
-    expect(handled).toBe(true);
-    expect(explicitRouteHandler).toHaveBeenCalledTimes(1);
+    expect(handled).toBe(false);
+    expect(explicitRouteHandler).not.toHaveBeenCalled();
   });
 
   it("handles routes registered into the pinned startup registry after the active registry changes", async () => {

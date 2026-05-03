@@ -1,6 +1,11 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "../shared/string-coerce.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
+import { asRecord } from "./tool-display-record.js";
 
-export type ToolDisplayActionSpec = {
+type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
 };
@@ -12,19 +17,13 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
-export type CoerceDisplayValueOptions = {
+type CoerceDisplayValueOptions = {
   includeFalse?: boolean;
   includeZero?: boolean;
   includeNonFinite?: boolean;
   maxStringChars?: number;
   maxArrayEntries?: number;
 };
-
-type ArgsRecord = Record<string, unknown>;
-
-function asRecord(args: unknown): ArgsRecord | undefined {
-  return args && typeof args === "object" ? (args as ArgsRecord) : undefined;
-}
 
 export function normalizeToolName(name?: string): string {
   return (name ?? "tool").trim();
@@ -45,15 +44,15 @@ export function defaultTitle(name: string): string {
     .join(" ");
 }
 
-export function normalizeVerb(value?: string): string | undefined {
-  const trimmed = value?.trim();
+function normalizeVerb(value?: string): string | undefined {
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return undefined;
   }
   return trimmed.replace(/_/g, " ");
 }
 
-export function resolveActionArg(args: unknown): string | undefined {
+function resolveActionArg(args: unknown): string | undefined {
   if (!args || typeof args !== "object") {
     return undefined;
   }
@@ -61,7 +60,7 @@ export function resolveActionArg(args: unknown): string | undefined {
   if (typeof actionRaw !== "string") {
     return undefined;
   }
-  const action = actionRaw.trim();
+  const action = normalizeOptionalString(actionRaw);
   return action || undefined;
 }
 
@@ -90,7 +89,7 @@ export function resolveToolVerbAndDetailForArgs(params: {
   });
 }
 
-export function coerceDisplayValue(
+function coerceDisplayValue(
   value: unknown,
   opts: CoerceDisplayValueOptions = {},
 ): string | undefined {
@@ -105,7 +104,7 @@ export function coerceDisplayValue(
     if (!trimmed) {
       return undefined;
     }
-    const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
+    const firstLine = normalizeOptionalString(trimmed.split(/\r?\n/)[0]) ?? "";
     if (!firstLine) {
       return undefined;
     }
@@ -142,7 +141,7 @@ export function coerceDisplayValue(
   return undefined;
 }
 
-export function lookupValueByPath(args: unknown, path: string): unknown {
+function lookupValueByPath(args: unknown, path: string): unknown {
   if (!args || typeof args !== "object") {
     return undefined;
   }
@@ -169,10 +168,10 @@ export function formatDetailKey(raw: string, overrides: Record<string, string> =
   }
   const cleaned = last.replace(/_/g, " ").replace(/-/g, " ");
   const spaced = cleaned.replace(/([a-z0-9])([A-Z])/g, "$1 $2");
-  return spaced.trim().toLowerCase() || last.toLowerCase();
+  return normalizeLowercaseStringOrEmpty(spaced) || normalizeLowercaseStringOrEmpty(last);
 }
 
-export function resolvePathArg(args: unknown): string | undefined {
+function resolvePathArg(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -189,7 +188,7 @@ export function resolvePathArg(args: unknown): string | undefined {
   return undefined;
 }
 
-export function resolveReadDetail(args: unknown): string | undefined {
+function resolveReadDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
@@ -226,14 +225,13 @@ export function resolveReadDetail(args: unknown): string | undefined {
   return `from ${path}`;
 }
 
-export function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
+function resolveWriteDetail(toolKey: string, args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
   }
 
-  const path =
-    resolvePathArg(record) ?? (typeof record.url === "string" ? record.url.trim() : undefined);
+  const path = resolvePathArg(record) ?? normalizeOptionalString(record.url);
   if (!path) {
     return undefined;
   }
@@ -259,13 +257,13 @@ export function resolveWriteDetail(toolKey: string, args: unknown): string | und
   return `${destinationPrefix} ${path}`;
 }
 
-export function resolveWebSearchDetail(args: unknown): string | undefined {
+function resolveWebSearchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
   }
 
-  const query = typeof record.query === "string" ? record.query.trim() : undefined;
+  const query = normalizeOptionalString(record.query);
   const count =
     typeof record.count === "number" && Number.isFinite(record.count) && record.count > 0
       ? Math.floor(record.count)
@@ -278,18 +276,18 @@ export function resolveWebSearchDetail(args: unknown): string | undefined {
   return count !== undefined ? `for "${query}" (top ${count})` : `for "${query}"`;
 }
 
-export function resolveWebFetchDetail(args: unknown): string | undefined {
+function resolveWebFetchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
     return undefined;
   }
 
-  const url = typeof record.url === "string" ? record.url.trim() : undefined;
+  const url = normalizeOptionalString(record.url);
   if (!url) {
     return undefined;
   }
 
-  const mode = typeof record.extractMode === "string" ? record.extractMode.trim() : undefined;
+  const mode = normalizeOptionalString(record.extractMode);
   const maxChars =
     typeof record.maxChars === "number" && Number.isFinite(record.maxChars) && record.maxChars > 0
       ? Math.floor(record.maxChars)
@@ -305,9 +303,7 @@ export function resolveWebFetchDetail(args: unknown): string | undefined {
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
 
-export { resolveExecDetail };
-
-export function resolveActionSpec(
+function resolveActionSpec(
   spec: ToolDisplaySpec | undefined,
   action: string | undefined,
 ): ToolDisplayActionSpec | undefined {
@@ -317,7 +313,7 @@ export function resolveActionSpec(
   return spec.actions?.[action] ?? undefined;
 }
 
-export function resolveDetailFromKeys(
+function resolveDetailFromKeys(
   args: unknown,
   keys: string[],
   opts: {
@@ -374,7 +370,7 @@ export function resolveDetailFromKeys(
     .join(" · ");
 }
 
-export function resolveToolVerbAndDetail(params: {
+function resolveToolVerbAndDetail(params: {
   toolKey: string;
   args?: unknown;
   meta?: string;

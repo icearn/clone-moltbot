@@ -6,10 +6,14 @@ const isDangerousNameMatchingEnabled = vi.hoisted(() => vi.fn());
 const resolveAllowlistProviderRuntimeGroupPolicy = vi.hoisted(() => vi.fn());
 const resolveDefaultGroupPolicy = vi.hoisted(() => vi.fn());
 const resolveDmGroupAccessWithLists = vi.hoisted(() => vi.fn());
-const resolveMentionGatingWithBypass = vi.hoisted(() => vi.fn());
+const resolveInboundMentionDecision = vi.hoisted(() => vi.fn());
 const resolveSenderScopedGroupPolicy = vi.hoisted(() => vi.fn());
 const warnMissingProviderGroupPolicyFallbackOnce = vi.hoisted(() => vi.fn());
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
+
+vi.mock("openclaw/plugin-sdk/channel-inbound", () => ({
+  resolveInboundMentionDecision,
+}));
 
 vi.mock("../runtime-api.js", () => ({
   GROUP_POLICY_BLOCKED_LABEL: { space: "space" },
@@ -19,7 +23,6 @@ vi.mock("../runtime-api.js", () => ({
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveDmGroupAccessWithLists,
-  resolveMentionGatingWithBypass,
   resolveSenderScopedGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 }));
@@ -84,7 +87,7 @@ function allowInboundGroupTraffic(options?: {
     effectiveAllowFrom: [],
     effectiveGroupAllowFrom: options?.effectiveGroupAllowFrom ?? ["users/alice"],
   });
-  resolveMentionGatingWithBypass.mockReturnValue({
+  resolveInboundMentionDecision.mockReturnValue({
     shouldSkip: false,
     effectiveWasMentioned: options?.effectiveWasMentioned ?? true,
   });
@@ -213,6 +216,89 @@ describe("googlechat inbound access policy", () => {
     });
   });
 
+  it("allows group traffic from generic message sender access groups", async () => {
+    primeCommonDefaults();
+    allowInboundGroupTraffic();
+
+    await expect(
+      applyInboundAccessPolicy({
+        config: {
+          ...baseAccessConfig,
+          accessGroups: {
+            operators: {
+              type: "message.senders",
+              members: {
+                googlechat: ["users/alice"],
+              },
+            },
+          },
+        } as never,
+        account: {
+          accountId: "default",
+          config: {
+            groups: {
+              "spaces/AAA": {
+                users: ["accessGroup:operators"],
+                requireMention: false,
+              },
+            },
+          },
+        } as never,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+    });
+  });
+
+  it("expands generic message sender access groups before DM access checks", async () => {
+    primeCommonDefaults();
+    const readAllowFromStore = vi.fn(async () => []);
+    createChannelPairingController.mockReturnValue({
+      readAllowFromStore,
+      issueChallenge: vi.fn(),
+    });
+    resolveDmGroupAccessWithLists.mockReturnValue({
+      decision: "allow",
+      effectiveAllowFrom: ["accessGroup:operators", "users/alice"],
+      effectiveGroupAllowFrom: [],
+    });
+
+    await expect(
+      applyInboundAccessPolicy({
+        isGroup: false,
+        config: {
+          ...baseAccessConfig,
+          accessGroups: {
+            operators: {
+              type: "message.senders",
+              members: {
+                googlechat: ["users/alice"],
+              },
+            },
+          },
+        } as never,
+        account: {
+          accountId: "default",
+          config: {
+            dm: {
+              policy: "allowlist",
+              allowFrom: ["accessGroup:operators"],
+            },
+          },
+        } as never,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+    });
+
+    expect(resolveDmGroupAccessWithLists).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowFrom: ["accessGroup:operators", "users/alice"],
+      }),
+    );
+    expect(readAllowFromStore).not.toHaveBeenCalled();
+  });
+
   it("preserves allowlist group policy when a routed space has no sender allowlist", async () => {
     primeCommonDefaults();
     allowInboundGroupTraffic({
@@ -230,7 +316,7 @@ describe("googlechat inbound access policy", () => {
           config: {
             groups: {
               "spaces/AAA": {
-                allow: true,
+                enabled: true,
               },
             },
           },
@@ -337,7 +423,7 @@ describe("googlechat inbound access policy", () => {
                 users: ["users/alice"],
               },
               "Finance Ops": {
-                allow: false,
+                enabled: false,
                 users: ["users/bob"],
               },
             },

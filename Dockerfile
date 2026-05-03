@@ -15,8 +15,6 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR=extensions
 ARG OPENCLAW_NODE_BOOKWORM_IMAGE="node:24-bookworm@sha256:3a09aa6354567619221ef6c45a5051b671f953f0a1924d1f819ffb236e520e6b"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="node:24-bookworm-slim@sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
 ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST="sha256:e8e2e91b1378f83c5b2dd15f0247f34110e2fe895f6ca7719dbb780f929368eb"
-ARG OPENCLAW_XHS_CONTEXT="xhs-empty"
-ARG OPENCLAW_XHS_GIT_REVISION=""
 # Keep in sync with .github/actions/setup-node-env/action.yml bun-version.
 # To update: docker buildx imagetools inspect oven/bun:<version> and use the manifest-list digest.
 ARG OPENCLAW_BUN_IMAGE="oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e"
@@ -42,34 +40,6 @@ RUN --mount=type=bind,source=${OPENCLAW_BUNDLED_PLUGIN_DIR},target=/tmp/${OPENCL
     done
 
 # ── Stage 2: Build ──────────────────────────────────────────────
-FROM scratch AS xhs-empty
-
-FROM ${OPENCLAW_XHS_CONTEXT} AS xhs-src
-
-FROM --platform=$BUILDPLATFORM golang:1.24-bookworm AS xhs-builder
-ARG OPENCLAW_INSTALL_XHS_MCP=""
-ARG TARGETOS
-ARG TARGETARCH
-WORKDIR /work
-RUN --mount=type=bind,from=xhs-src,source=.,target=/mnt/xhs-src,ro \
-    set -eux; \
-    mkdir -p /out; \
-    printf '%s\n' '#!/bin/sh' 'echo "xiaohongshu-mcp is not installed in this image" >&2' 'exit 1' > /out/xiaohongshu-mcp; \
-    chmod 755 /out/xiaohongshu-mcp; \
-    if [ -z "$OPENCLAW_INSTALL_XHS_MCP" ]; then \
-      exit 0; \
-    fi; \
-    test -f /mnt/xhs-src/go.mod || { \
-      echo "ERROR: OPENCLAW_INSTALL_XHS_MCP is enabled but the xiaohongshu-mcp source context is missing." >&2; \
-      echo "Pass --build-context xiaohongshu_mcp=../xiaohongshu-mcp and --build-arg OPENCLAW_XHS_CONTEXT=xiaohongshu_mcp." >&2; \
-      exit 1; \
-    }; \
-    cp -a /mnt/xhs-src/. /work/xiaohongshu-mcp; \
-    cd /work/xiaohongshu-mcp; \
-    go mod download; \
-    CGO_ENABLED=0 GOOS="${TARGETOS:-linux}" GOARCH="${TARGETARCH:-amd64}" \
-      go build -trimpath -ldflags="-s -w" -o /out/xiaohongshu-mcp .
-
 FROM ${OPENCLAW_BUN_IMAGE} AS bun-binary
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 ARG OPENCLAW_BUNDLED_PLUGIN_DIR
@@ -176,8 +146,7 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
   org.opencontainers.image.documentation="https://docs.openclaw.ai/install/docker" \
   org.opencontainers.image.licenses="MIT" \
   org.opencontainers.image.title="OpenClaw" \
-  org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image" \
-  io.openclaw.xiaohongshu-mcp.revision="${OPENCLAW_XHS_GIT_REVISION}"
+  org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image"
 
 WORKDIR /app
 
@@ -204,7 +173,6 @@ COPY --from=runtime-assets --chown=node:node /app/${OPENCLAW_BUNDLED_PLUGIN_DIR}
 COPY --from=runtime-assets --chown=node:node /app/skills ./skills
 COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 COPY --from=runtime-assets --chown=node:node /app/qa ./qa
-COPY --from=xhs-builder /out/xiaohongshu-mcp /usr/local/bin/xiaohongshu-mcp
 
 # Keep pnpm available in the runtime image for container-local workflows.
 # Use a shared Corepack home so the non-root `node` user does not need a
@@ -303,10 +271,6 @@ ENV NODE_ENV=production
 # The node:24-bookworm image includes a 'node' user (uid 1000)
 # This reduces the attack surface by preventing container escape via root privileges
 USER node
-
-RUN set -eux; \
-    [ ! -f /app/scripts/docker/openclaw-entrypoint.sh ] || chmod 755 /app/scripts/docker/openclaw-entrypoint.sh; \
-    [ ! -f /app/scripts/docker/start-xiaohongshu-mcp.sh ] || chmod 755 /app/scripts/docker/start-xiaohongshu-mcp.sh
 
 # Start gateway server with default config.
 # Binds to loopback (127.0.0.1) by default for security.

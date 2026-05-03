@@ -3,11 +3,15 @@ import {
   attachChannelToResult,
   createAttachedChannelResultAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import { resolveInteractiveTextFallback } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  presentationToInteractiveReply,
+  renderMessagePresentationFallbackText,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import {
   resolveOutboundSendDep,
   type OutboundSendDeps,
-} from "openclaw/plugin-sdk/outbound-runtime";
+} from "openclaw/plugin-sdk/outbound-send-deps";
 import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,
@@ -16,22 +20,30 @@ import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { resolveTelegramInlineButtons } from "./button-types.js";
 import { markdownToTelegramHtmlChunks } from "./format.js";
+import { resolveTelegramInteractiveTextFallback } from "./interactive-fallback.js";
 import { parseTelegramReplyToMessageId, parseTelegramThreadId } from "./outbound-params.js";
-import { sendMessageTelegram } from "./send.js";
+import { pinMessageTelegram } from "./send.js";
 
 export const TELEGRAM_TEXT_CHUNK_LIMIT = 4000;
 
-type TelegramSendFn = typeof sendMessageTelegram;
+type TelegramSendFn = typeof import("./send.js").sendMessageTelegram;
 type TelegramSendOpts = Parameters<TelegramSendFn>[2];
 
-function resolveTelegramSendContext(params: {
+let telegramSendModulePromise: Promise<typeof import("./send.js")> | undefined;
+
+async function loadTelegramSendModule() {
+  telegramSendModulePromise ??= import("./send.js");
+  return await telegramSendModulePromise;
+}
+
+async function resolveTelegramSendContext(params: {
   cfg: NonNullable<TelegramSendOpts>["cfg"];
   deps?: OutboundSendDeps;
   accountId?: string | null;
   replyToId?: string | null;
   threadId?: string | number | null;
   gatewayClientScopes?: readonly string[];
-}): {
+}): Promise<{
   send: TelegramSendFn;
   baseOpts: {
     cfg: NonNullable<TelegramSendOpts>["cfg"];
@@ -42,9 +54,10 @@ function resolveTelegramSendContext(params: {
     accountId?: string;
     gatewayClientScopes?: readonly string[];
   };
-} {
+}> {
   const send =
-    resolveOutboundSendDep<TelegramSendFn>(params.deps, "telegram") ?? sendMessageTelegram;
+    resolveOutboundSendDep<TelegramSendFn>(params.deps, "telegram") ??
+    (await loadTelegramSendModule()).sendMessageTelegram;
   return {
     send,
     baseOpts: {
@@ -71,7 +84,7 @@ export async function sendTelegramPayloadMessages(params: {
   const quoteText =
     typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined;
   const text =
-    resolveInteractiveTextFallback({
+    resolveTelegramInteractiveTextFallback({
       text: params.payload.text,
       interactive: params.payload.interactive,
     }) ?? "";
@@ -83,6 +96,7 @@ export async function sendTelegramPayloadMessages(params: {
   const payloadOpts = {
     ...params.baseOpts,
     quoteText,
+    ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
 
   // Telegram allows reply_markup on media; attach buttons only to the first send.
@@ -108,8 +122,33 @@ export const telegramOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: markdownToTelegramHtmlChunks,
   chunkerMode: "markdown",
+  extractMarkdownImages: true,
   textChunkLimit: TELEGRAM_TEXT_CHUNK_LIMIT,
+  sanitizeText: ({ text }) => sanitizeForPlainText(text),
   shouldSkipPlainTextSanitization: ({ payload }) => Boolean(payload.channelData),
+  presentationCapabilities: {
+    supported: true,
+    buttons: true,
+    selects: true,
+    context: true,
+    divider: false,
+  },
+  deliveryCapabilities: {
+    pin: true,
+  },
+  renderPresentation: ({ payload, presentation }) => ({
+    ...payload,
+    text: renderMessagePresentationFallbackText({ text: payload.text, presentation }),
+    interactive: presentationToInteractiveReply(presentation),
+  }),
+  pinDeliveredMessage: async ({ cfg, target, messageId, pin }) => {
+    await pinMessageTelegram(target.to, messageId, {
+      cfg,
+      accountId: target.accountId ?? undefined,
+      notify: pin.notify,
+      verbose: false,
+    });
+  },
   resolveEffectiveTextChunkLimit: ({ fallbackLimit }) =>
     typeof fallbackLimit === "number" ? Math.min(fallbackLimit, 4096) : 4096,
   ...createAttachedChannelResultAdapter({
@@ -124,7 +163,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       threadId,
       gatewayClientScopes,
     }) => {
-      const { send, baseOpts } = resolveTelegramSendContext({
+      const { send, baseOpts } = await resolveTelegramSendContext({
         cfg,
         deps,
         accountId,
@@ -150,7 +189,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       forceDocument,
       gatewayClientScopes,
     }) => {
-      const { send, baseOpts } = resolveTelegramSendContext({
+      const { send, baseOpts } = await resolveTelegramSendContext({
         cfg,
         deps,
         accountId,
@@ -180,7 +219,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     forceDocument,
     gatewayClientScopes,
   }) => {
-    const { send, baseOpts } = resolveTelegramSendContext({
+    const { send, baseOpts } = await resolveTelegramSendContext({
       cfg,
       deps,
       accountId,
