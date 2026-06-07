@@ -1,8 +1,10 @@
+// Computes git, dependency, and registry update status for OpenClaw installs.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
+import { compareOpenClawReleaseVersions } from "./npm-registry-spec.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
@@ -199,10 +201,10 @@ async function statMtimeMs(p: string): Promise<number | null> {
   }
 }
 
-function resolveDepsMarker(params: { root: string; manager: PackageManager }): {
+async function resolveDepsMarker(params: { root: string; manager: PackageManager }): Promise<{
   lockfilePath: string | null;
   markerPath: string | null;
-} {
+}> {
   const root = params.root;
   if (params.manager === "pnpm") {
     return {
@@ -217,8 +219,11 @@ function resolveDepsMarker(params: { root: string; manager: PackageManager }): {
     };
   }
   if (params.manager === "npm") {
+    const shrinkwrapPath = path.join(root, "npm-shrinkwrap.json");
     return {
-      lockfilePath: path.join(root, "package-lock.json"),
+      lockfilePath: (await exists(shrinkwrapPath))
+        ? shrinkwrapPath
+        : path.join(root, "package-lock.json"),
       markerPath: path.join(root, "node_modules"),
     };
   }
@@ -230,7 +235,7 @@ export async function checkDepsStatus(params: {
   manager: PackageManager;
 }): Promise<DepsStatus> {
   const root = path.resolve(params.root);
-  const { lockfilePath, markerPath } = resolveDepsMarker({
+  const { lockfilePath, markerPath } = await resolveDepsMarker({
     root,
     manager: params.manager,
   });
@@ -384,6 +389,12 @@ export async function resolveNpmChannelTag(params: {
 }
 
 export function compareSemverStrings(a: string | null, b: string | null): number | null {
+  if (a && b) {
+    const openClawReleaseCmp = compareOpenClawReleaseVersions(a, b);
+    if (openClawReleaseCmp != null) {
+      return openClawReleaseCmp;
+    }
+  }
   return compareComparableSemver(
     parseComparableSemver(a, { normalizeLegacyDotBeta: true }),
     parseComparableSemver(b, { normalizeLegacyDotBeta: true }),

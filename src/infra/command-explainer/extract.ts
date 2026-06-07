@@ -1,9 +1,19 @@
+// Rich shell command explainer walks tree-sitter-bash nodes into command steps,
+// nested wrapper payloads, source spans, and risk annotations.
 import type { Node as TreeSitterNode } from "web-tree-sitter";
-import { unwrapKnownDispatchWrapperInvocation } from "../dispatch-wrapper-resolution.js";
-import { detectInterpreterInlineEvalArgv } from "../exec-inline-eval.js";
+import type { InterpreterInlineEvalHit } from "../command-analysis/inline-eval.js";
+import {
+  detectCarriedShellBuiltinArgv,
+  detectCarrierInlineEvalArgv as detectSharedCarrierInlineEvalArgv,
+  detectCommandCarrierArgv,
+  detectInlineEvalArgv,
+  detectShellWrapperThroughCarrierArgv,
+  SOURCE_EXECUTABLES,
+} from "../command-analysis/risks.js";
 import { normalizeExecutableToken } from "../exec-wrapper-resolution.js";
 import {
   extractShellWrapperCommand,
+  extractShellWrapperInlineCommand,
   isShellWrapperExecutable,
   POSIX_SHELL_WRAPPERS,
   resolveShellWrapperTransportArgv,
@@ -54,9 +64,8 @@ type WalkState = {
 const MAX_WRAPPER_PAYLOAD_DEPTH = 2;
 
 const PARSEABLE_SHELL_WRAPPERS = new Set<string>(POSIX_SHELL_WRAPPERS);
-const SHELL_CARRIER_EXECUTABLES = new Set(["sudo", "doas", "env", "command", "builtin"]);
-const SOURCE_EXECUTABLES = new Set([".", "source"]);
 
+// Span bases map nested wrapper payload offsets back to source command offsets.
 type SpanBase = {
   startIndex: number;
   startPosition: SourceSpan["startPosition"];
@@ -68,6 +77,7 @@ const ROOT_SPAN_BASE: SpanBase = {
   startPosition: { row: 0, column: 0 },
 };
 
+// Tree-sitter exposes nullable children; normalize once for the walkers below.
 function children(node: TreeSitterNode): TreeSitterNode[] {
   return Array.from({ length: node.childCount }, (_, index) => node.child(index)).filter(
     (child): child is TreeSitterNode => child !== null,
@@ -256,9 +266,7 @@ function appendDecodedText(
   sourceEndOffset: number,
 ): void {
   decoded.value += value;
-  for (let index = 0; index < value.length; index += 1) {
-    decoded.sourceOffsets.push(sourceEndOffset);
-  }
+  decoded.sourceOffsets.push(...Array.from({ length: value.length }, () => sourceEndOffset));
 }
 
 function identityDecodedShellText(text: string, sourceOffset = 0): DecodedShellText {
@@ -872,14 +880,11 @@ function shellWrapperPayloadForParsing(
   dynamicArguments: DynamicArgument[],
 ): { command: string; spanBase: SpanBase } | null {
   const shellWrapper = extractShellWrapperCommand(argv);
-  if (
-    !shellWrapper.isWrapper ||
-    !shellWrapper.command ||
-    isDynamicPayload(shellWrapper.command, dynamicArguments)
-  ) {
+  const payload = shellWrapper.command ?? extractShellWrapperInlineCommand(argv);
+  if (!shellWrapper.isWrapper || !payload || isDynamicPayload(payload, dynamicArguments)) {
     return null;
   }
-  const spanBase = payloadBaseFromArguments(shellWrapper.command, argumentsList);
+  const spanBase = payloadBaseFromArguments(payload, argumentsList);
   if (!spanBase) {
     return null;
   }
@@ -888,46 +893,10 @@ function shellWrapperPayloadForParsing(
   if (!canParseShellWrapperPayload(transportArgv, commandFlag?.flag ?? null)) {
     return null;
   }
-  return { command: shellWrapper.command, spanBase };
+  return { command: payload, spanBase };
 }
 
-type InlineEvalHit = NonNullable<ReturnType<typeof detectInterpreterInlineEvalArgv>>;
-
-function detectCarrierInlineEvalArgv(argv: string[]): InlineEvalHit | null {
-  const dispatchUnwrap = unwrapKnownDispatchWrapperInvocation(argv);
-  if (dispatchUnwrap.kind === "unwrapped") {
-    return detectInterpreterInlineEvalArgv(dispatchUnwrap.argv);
-  }
-
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!SHELL_CARRIER_EXECUTABLES.has(executable)) {
-    return null;
-  }
-  for (let index = 1; index < argv.length; index += 1) {
-    const hit = detectInterpreterInlineEvalArgv(argv.slice(index));
-    if (hit) {
-      return hit;
-    }
-  }
-  return null;
-}
-
-function envSplitStringFlag(argv: string[]): string | null {
-  if (normalizeExecutableToken(argv[0] ?? "") !== "env") {
-    return null;
-  }
-  for (const arg of argv.slice(1)) {
-    const token = arg.trim();
-    if (token === "-S" || token === "--split-string") {
-      return token;
-    }
-    if (token.startsWith("--split-string=") || (token.startsWith("-S") && token.length > 2)) {
-      return token.startsWith("--") ? "--split-string" : "-S";
-    }
-  }
-  return null;
-}
-
+type InlineEvalHit = InterpreterInlineEvalHit;
 function recordInlineEvalRisk(
   inlineEval: InlineEvalHit,
   text: string,
@@ -972,13 +941,14 @@ function recordCommandRisks(
   }
   const normalizedExecutable = normalizeExecutableToken(executable);
   recordDynamicArgumentRisks(normalizedExecutable, dynamicArguments, output);
-  const inlineEval = detectInterpreterInlineEvalArgv(argv) ?? detectCarrierInlineEvalArgv(argv);
+  const inlineEval = detectInlineEvalArgv(argv) ?? detectSharedCarrierInlineEvalArgv(argv);
   if (inlineEval) {
     recordInlineEvalRisk(inlineEval, text, span, output);
   }
 
   const shellWrapper = extractShellWrapperCommand(argv);
-  if (shellWrapper.isWrapper && shellWrapper.command) {
+  const shellWrapperPayload = shellWrapper.command ?? extractShellWrapperInlineCommand(argv);
+  if (shellWrapper.isWrapper && shellWrapperPayload) {
     const transportArgv = resolveShellWrapperTransportArgv(argv) ?? argv;
     const shellExecutable = transportArgv[0] ?? executable;
     const commandFlag = shellCommandFlag(transportArgv, 1) ?? shellCommandFlag(argv, 1);
@@ -987,7 +957,7 @@ function recordCommandRisks(
         kind: "shell-wrapper",
         executable: shellExecutable,
         flag: commandFlag?.flag ?? "-c",
-        payload: shellWrapper.command,
+        payload: shellWrapperPayload,
         text,
         span,
       });
@@ -1001,21 +971,11 @@ function recordCommandRisks(
     }
   }
 
-  if (normalizedExecutable === "find") {
-    const flag = argv.find((arg) => ["-exec", "-execdir", "-ok", "-okdir"].includes(arg));
-    if (flag) {
-      output.risks.push({ kind: "command-carrier", command: executable, flag, text, span });
-    }
-  }
-  if (normalizedExecutable === "xargs") {
-    output.risks.push({ kind: "command-carrier", command: normalizedExecutable, text, span });
-  }
-  const splitStringFlag = envSplitStringFlag(argv);
-  if (splitStringFlag) {
+  for (const carrier of detectCommandCarrierArgv(argv)) {
     output.risks.push({
       kind: "command-carrier",
-      command: normalizedExecutable,
-      flag: splitStringFlag,
+      command: carrier.command,
+      flag: carrier.flag,
       text,
       span,
     });
@@ -1029,34 +989,28 @@ function recordCommandRisks(
   if (normalizedExecutable === "alias") {
     output.risks.push({ kind: "alias", text, span });
   }
-  if (!shellWrapper.isWrapper && SHELL_CARRIER_EXECUTABLES.has(normalizedExecutable)) {
-    const shellIndex = argv.findIndex((arg) => isShellWrapperExecutable(arg));
-    if (shellIndex >= 0 && shellCommandFlag(argv, shellIndex + 1)) {
-      output.risks.push({
-        kind: "shell-wrapper-through-carrier",
-        command: normalizedExecutable,
-        text,
-        span,
-      });
-    }
-
-    const carriedCommand = argv.slice(1).find((arg) => {
-      const normalized = normalizeExecutableToken(arg);
-      return normalized === "eval" || SOURCE_EXECUTABLES.has(normalized);
+  const carrierShellWrapper = !shellWrapper.isWrapper
+    ? detectShellWrapperThroughCarrierArgv(argv, shellCommandFlag)
+    : null;
+  if (carrierShellWrapper) {
+    output.risks.push({
+      kind: "shell-wrapper-through-carrier",
+      command: carrierShellWrapper,
+      text,
+      span,
     });
-    const normalizedCarriedCommand = carriedCommand
-      ? normalizeExecutableToken(carriedCommand)
-      : undefined;
-    if (normalizedCarriedCommand === "eval") {
-      output.risks.push({ kind: "eval", text, span });
-    } else if (normalizedCarriedCommand && SOURCE_EXECUTABLES.has(normalizedCarriedCommand)) {
-      output.risks.push({
-        kind: "source",
-        command: normalizedCarriedCommand,
-        text,
-        span,
-      });
-    }
+  }
+
+  const carriedShellBuiltin = detectCarriedShellBuiltinArgv(argv);
+  if (carriedShellBuiltin?.kind === "eval") {
+    output.risks.push({ kind: "eval", text, span });
+  } else if (carriedShellBuiltin?.kind === "source") {
+    output.risks.push({
+      kind: "source",
+      command: carriedShellBuiltin.command,
+      text,
+      span,
+    });
   }
 }
 
@@ -1126,6 +1080,10 @@ async function walk(
         argv: parsed.argv,
         text: node.text,
         span,
+        executableSpan:
+          nameNode !== null
+            ? spanFromNode(nameNode, state.spanBase)
+            : (parsed.arguments[0]?.span ?? span),
       };
       if (step.executable) {
         output.commands.push(step);
@@ -1167,6 +1125,7 @@ async function walk(
   }
 }
 
+/** Parses a shell command into command steps, shapes, risks, and source spans. */
 export async function explainShellCommand(source: string): Promise<CommandExplanation> {
   const tree = await parseBashForCommandExplanation(source);
   try {

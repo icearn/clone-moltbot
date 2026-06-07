@@ -1,19 +1,25 @@
+// Outbound message entrypoint resolves channel/target, durable capability
+// requirements, payload plans, gateway fallback, and optional mirroring.
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { deriveDurableFinalDeliveryRequirements } from "../../channels/message/capabilities.js";
+import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../../utils/message-channel.js";
 import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
-  deliverOutboundPayloads,
+  resolveOutboundDurableFinalDeliverySupport,
+  type DurableFinalDeliveryRequirements,
   type OutboundDeliveryResult,
+  type OutboundDeliveryQueuePolicy,
   type OutboundSendDeps,
 } from "./deliver.js";
+import {
+  resolveOutboundMessageGatewayOptions,
+  type OutboundMessageGatewayOptionsInput,
+} from "./message-gateway-options.js";
 import type { OutboundMirror } from "./mirror.js";
 import {
   createOutboundPayloadPlan,
@@ -29,6 +35,8 @@ let messageGatewayRuntimePromise: Promise<typeof import("./message.gateway.runti
   null;
 
 function loadMessageConfigRuntime() {
+  // Keep config/runtime loading lazy so importing message helpers does not
+  // bootstrap plugin registries or gateway clients.
   messageConfigRuntimePromise ??= import("./message.config.runtime.js");
   return messageConfigRuntimePromise;
 }
@@ -38,14 +46,7 @@ function loadMessageGatewayRuntime() {
   return messageGatewayRuntimePromise;
 }
 
-export type MessageGatewayOptions = {
-  url?: string;
-  token?: string;
-  timeoutMs?: number;
-  clientName?: GatewayClientName;
-  clientDisplayName?: string;
-  mode?: GatewayClientMode;
-};
+export type MessageGatewayOptions = OutboundMessageGatewayOptionsInput;
 
 type MessageSendParams = {
   to: string;
@@ -75,6 +76,9 @@ type MessageSendParams = {
   threadId?: string | number;
   dryRun?: boolean;
   bestEffort?: boolean;
+  queuePolicy?: OutboundDeliveryQueuePolicy;
+  payloads?: ReplyPayload[];
+  mediaAccess?: OutboundMediaAccess;
   deps?: OutboundSendDeps;
   cfg?: OpenClawConfig;
   gateway?: MessageGatewayOptions;
@@ -82,6 +86,7 @@ type MessageSendParams = {
   mirror?: OutboundMirror;
   abortSignal?: AbortSignal;
   silent?: boolean;
+  parseMode?: "HTML";
 };
 
 export type MessageSendResult = {
@@ -177,25 +182,81 @@ function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
   return plugin;
 }
 
+function payloadRequiresDurablePayloadTransport(payload: ReplyPayload): boolean {
+  return (
+    payload.presentation !== undefined ||
+    payload.delivery !== undefined ||
+    payload.interactive !== undefined ||
+    (payload.channelData !== undefined && Object.keys(payload.channelData).length > 0)
+  );
+}
+
+function mergeDurableRequirements(
+  target: DurableFinalDeliveryRequirements,
+  source: DurableFinalDeliveryRequirements,
+): DurableFinalDeliveryRequirements {
+  for (const [capability, required] of Object.entries(source) as Array<
+    [keyof DurableFinalDeliveryRequirements, boolean | undefined]
+  >) {
+    if (required === true) {
+      target[capability] = true;
+    }
+  }
+  return target;
+}
+
+function deriveRequiredMessageSendCapabilities(params: {
+  payloads: ReplyPayload[];
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean;
+}): DurableFinalDeliveryRequirements {
+  const requirements: DurableFinalDeliveryRequirements = { reconcileUnknownSend: true };
+  for (const payload of params.payloads) {
+    mergeDurableRequirements(
+      requirements,
+      deriveDurableFinalDeliveryRequirements({
+        payload,
+        replyToId: params.replyToId,
+        threadId: params.threadId,
+        silent: params.silent,
+        payloadTransport: payloadRequiresDurablePayloadTransport(payload),
+        batch: params.payloads.length > 1,
+        reconcileUnknownSend: true,
+      }),
+    );
+  }
+  return requirements;
+}
+
+async function assertRequiredMessageSendDurability(params: {
+  cfg: OpenClawConfig;
+  channel: Exclude<string, "none">;
+  payloads: ReplyPayload[];
+  replyToId?: string | null;
+  threadId?: string | number | null;
+  silent?: boolean;
+}): Promise<void> {
+  const support = await resolveOutboundDurableFinalDeliverySupport({
+    cfg: params.cfg,
+    channel: params.channel,
+    requirements: deriveRequiredMessageSendCapabilities(params),
+  });
+  if (support.ok) {
+    return;
+  }
+  const suffix =
+    support.reason === "capability_mismatch" && support.capability
+      ? `missing ${support.capability}`
+      : support.reason;
+  throw new Error(
+    `Required durable message send is unsupported for ${params.channel}: ${suffix}. ` +
+      'Use queuePolicy:"best_effort" for best-effort delivery, omit bestEffort:false in message-tool calls, or use a channel with required durable delivery support.',
+  );
+}
+
 function resolveGatewayOptions(opts?: MessageGatewayOptions) {
-  // Security: backend callers (tools/agents) must not accept user-controlled gateway URLs.
-  // Use config-derived gateway target only.
-  const url =
-    opts?.mode === GATEWAY_CLIENT_MODES.BACKEND ||
-    opts?.clientName === GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
-      ? undefined
-      : opts?.url;
-  return {
-    url,
-    token: opts?.token,
-    timeoutMs:
-      typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
-        ? Math.max(1, Math.floor(opts.timeoutMs))
-        : 10_000,
-    clientName: opts?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-    clientDisplayName: opts?.clientDisplayName,
-    mode: opts?.mode ?? GATEWAY_CLIENT_MODES.CLI,
-  };
+  return resolveOutboundMessageGatewayOptions(opts);
 }
 
 async function callMessageGateway<T>(params: {
@@ -238,14 +299,18 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
   const plugin = resolveRequiredPlugin(channel, cfg);
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
-  const outboundPlan = createOutboundPayloadPlan([
-    {
-      text: params.content,
-      mediaUrl: params.mediaUrl,
-      mediaUrls: params.mediaUrls,
-      audioAsVoice: params.asVoice === true,
-    },
-  ]);
+  const outboundPayloads =
+    params.payloads && params.payloads.length > 0
+      ? params.payloads
+      : [
+          {
+            text: params.content,
+            mediaUrl: params.mediaUrl,
+            mediaUrls: params.mediaUrls,
+            audioAsVoice: params.asVoice === true,
+          },
+        ];
+  const outboundPlan = createOutboundPayloadPlan(outboundPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForDelivery(outboundPlan);
   const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPlan);
   const mirrorText = mirrorProjection.text;
@@ -286,7 +351,17 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       requesterSenderUsername: params.requesterSenderUsername,
       requesterSenderE164: params.requesterSenderE164,
     });
-    const results = await deliverOutboundPayloads({
+    if (params.queuePolicy === "required") {
+      await assertRequiredMessageSendDurability({
+        cfg,
+        channel: outboundChannel,
+        payloads: normalizedPayloads,
+        replyToId: params.replyToId,
+        threadId: params.threadId,
+        silent: params.silent,
+      });
+    }
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: outboundChannel,
       to: resolvedTarget.to,
@@ -299,8 +374,12 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       forceDocument: params.forceDocument,
       deps: params.deps,
       bestEffort: params.bestEffort,
-      abortSignal: params.abortSignal,
+      durability:
+        params.bestEffort || params.queuePolicy === "best_effort" ? "best_effort" : "required",
+      signal: params.abortSignal,
       silent: params.silent,
+      mediaAccess: params.mediaAccess,
+      formatting: params.parseMode ? { parseMode: params.parseMode } : undefined,
       mirror: params.mirror
         ? {
             ...params.mirror,
@@ -310,6 +389,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
           }
         : undefined,
     });
+    if (!params.bestEffort && (send.status === "failed" || send.status === "partial_failed")) {
+      throw send.error;
+    }
+    const results = send.status === "sent" || send.status === "partial_failed" ? send.results : [];
 
     return {
       channel,
@@ -335,6 +418,10 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
       agentId: params.agentId,
       channel,
       replyToId: params.replyToId,
+      threadId: params.threadId != null ? String(params.threadId) : undefined,
+      forceDocument: params.forceDocument,
+      silent: params.silent,
+      parseMode: params.parseMode,
       sessionKey: params.mirror?.sessionKey,
       idempotencyKey: await resolveGatewayIdempotencyKey(params.idempotencyKey),
     },

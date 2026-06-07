@@ -1,6 +1,8 @@
+// Debug proxy runtime commands for capture sessions, validation, coverage, and blob reads.
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import process from "node:process";
+import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   runProxyValidation,
@@ -61,7 +63,7 @@ export async function runDebugProxyStartCommand(opts: { host?: string; port?: nu
   };
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
-  await new Promise(() => undefined);
+  await new Promise(() => {});
 }
 
 export async function runDebugProxyRunCommand(opts: {
@@ -69,6 +71,7 @@ export async function runDebugProxyRunCommand(opts: {
   port?: number;
   commandArgs: string[];
 }) {
+  // Each proxied child command gets its own capture session id for later query/filtering.
   if (opts.commandArgs.length === 0) {
     throw new Error("proxy run requires a command after --");
   }
@@ -148,11 +151,41 @@ function redactProxyValidationResult(result: ProxyValidationResult): ProxyValida
   };
 }
 
-function formatProxyCheckLine(check: ProxyValidationResult["checks"][number]): string {
-  const icon = check.ok ? "✓" : "✗";
-  const paddedKind = check.kind.padEnd(7, " ");
-  const status = check.status === undefined ? "" : ` HTTP ${check.status}`;
-  return `  ${icon} ${paddedKind} ${check.url}${status}`;
+type ProxyValidationTextColors = {
+  heading: (value: string) => string;
+  success: (value: string) => string;
+  error: (value: string) => string;
+  muted: (value: string) => string;
+  warn: (value: string) => string;
+};
+
+function getProxyValidationTextColors(): ProxyValidationTextColors {
+  const rich = isRich();
+  const apply = (color: (value: string) => string) => (value: string) =>
+    colorize(rich, color, value);
+  return {
+    heading: apply(theme.heading),
+    success: apply(theme.success),
+    error: apply(theme.error),
+    muted: apply(theme.muted),
+    warn: apply(theme.warn),
+  };
+}
+
+function formatProxyCheckLine(
+  check: ProxyValidationResult["checks"][number],
+  colors: ProxyValidationTextColors,
+): string {
+  const icon = check.ok ? colors.success("✓") : colors.error("✗");
+  const paddedKind = colors.muted(check.kind.padEnd(7, " "));
+  const status =
+    check.status === undefined
+      ? ""
+      : ` ${check.ok ? colors.success(`HTTP ${check.status}`) : colors.error(`HTTP ${check.status}`)}`;
+  const detail = check.error
+    ? ` — ${check.ok ? colors.muted(check.error) : colors.error(check.error)}`
+    : "";
+  return `  ${icon} ${paddedKind} ${check.url}${status}${detail}`;
 }
 
 function formatProxyValidationNextSteps(result: ProxyValidationResult): string[] {
@@ -164,9 +197,14 @@ function formatProxyValidationNextSteps(result: ProxyValidationResult): string[]
       "Enable proxy.enabled with proxy.proxyUrl or OPENCLAW_PROXY_URL, or pass --proxy-url for an explicit one-off validation.",
     ];
   }
+  if (result.config.errors.some((error) => error.includes("proxy CA file could not be read"))) {
+    return [
+      "Confirm proxy.tls.caFile or --proxy-ca-file points to a readable PEM CA file for the HTTPS proxy endpoint.",
+    ];
+  }
   if (result.config.errors.length > 0) {
     return [
-      "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// proxy.",
+      "Fix proxy.proxyUrl, OPENCLAW_PROXY_URL, or --proxy-url so it uses a reachable http:// or https:// proxy.",
     ];
   }
   if (result.checks.some((check) => !check.ok && check.kind === "allowed")) {
@@ -185,37 +223,35 @@ function formatProxyValidationNextSteps(result: ProxyValidationResult): string[]
 }
 
 function formatProxyValidationText(result: ProxyValidationResult): string {
+  const colors = getProxyValidationTextColors();
   const redactedProxyUrl = redactProxyUrl(result.config.proxyUrl);
   const lines = [
-    `Proxy validation ${result.ok ? "passed" : "failed"}`,
+    result.ok ? colors.success("Proxy validation passed") : colors.error("Proxy validation failed"),
     "",
-    "Proxy",
-    `  Source: ${result.config.source}`,
-    `  URL:    ${redactedProxyUrl ?? "not configured"}`,
+    colors.heading("Proxy"),
+    `  Source: ${colors.muted(result.config.source)}`,
+    `  URL:    ${redactedProxyUrl ?? colors.muted("not configured")}`,
   ];
 
   if (result.config.errors.length > 0) {
-    lines.push("", "Problems");
+    lines.push("", colors.heading("Problems"));
     for (const error of result.config.errors) {
-      lines.push(`  - ${error}`);
+      lines.push(`  - ${colors.error(error)}`);
     }
   }
 
   if (result.checks.length > 0) {
-    lines.push("", "Checks");
+    lines.push("", colors.heading("Checks"));
     for (const check of result.checks) {
-      lines.push(formatProxyCheckLine(check));
-      if (check.error) {
-        lines.push(`    ${check.error}`);
-      }
+      lines.push(formatProxyCheckLine(check, colors));
     }
   }
 
   const nextSteps = formatProxyValidationNextSteps(result);
   if (nextSteps.length > 0) {
-    lines.push("", "Next steps");
+    lines.push("", colors.heading("Next steps"));
     for (const nextStep of nextSteps) {
-      lines.push(`  ${nextStep}`);
+      lines.push(`  ${colors.warn(nextStep)}`);
     }
   }
 
@@ -225,8 +261,11 @@ function formatProxyValidationText(result: ProxyValidationResult): string {
 export async function runProxyValidateCommand(opts: {
   json?: boolean;
   proxyUrl?: string;
+  proxyCaFile?: string;
   allowedUrls?: string[];
   deniedUrls?: string[];
+  apnsReachability?: boolean;
+  apnsAuthority?: string;
   timeoutMs?: number;
 }) {
   const config = getRuntimeConfig();
@@ -234,8 +273,11 @@ export async function runProxyValidateCommand(opts: {
     config: config?.proxy,
     env: process.env,
     proxyUrlOverride: opts.proxyUrl,
+    proxyCaFileOverride: opts.proxyCaFile,
     allowedUrls: opts.allowedUrls,
     deniedUrls: opts.deniedUrls,
+    apnsReachability: opts.apnsReachability,
+    apnsAuthority: opts.apnsAuthority,
     timeoutMs: opts.timeoutMs,
   });
   const outputResult = redactProxyValidationResult(result);

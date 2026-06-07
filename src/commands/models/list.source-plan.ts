@@ -1,6 +1,10 @@
+/** Chooses which source family should back a model-list invocation. */
+import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { NormalizedModelCatalogRow } from "../../model-catalog/index.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
+/** Source family selected for a model-list run. */
 export type ModelListSourcePlanKind =
   | "registry"
   | "manifest"
@@ -8,6 +12,7 @@ export type ModelListSourcePlanKind =
   | "provider-runtime-static"
   | "provider-runtime-scoped";
 
+/** Concrete source plan plus preloaded catalog rows and fallback flags. */
 export type ModelListSourcePlan = {
   kind: ModelListSourcePlanKind;
   manifestCatalogRows: readonly NormalizedModelCatalogRow[];
@@ -16,6 +21,12 @@ export type ModelListSourcePlan = {
   skipRuntimeModelSuppression: boolean;
   fallbackToRegistryWhenEmpty: boolean;
 };
+
+type ProviderIndexCatalogModule = typeof import("./list.provider-index-catalog.js");
+
+const providerIndexCatalogLoader = createLazyImportLoader<ProviderIndexCatalogModule>(
+  () => import("./list.provider-index-catalog.js"),
+);
 
 function createSourcePlan(params: {
   kind: ModelListSourcePlanKind;
@@ -35,6 +46,7 @@ function createSourcePlan(params: {
   };
 }
 
+/** Creates the baseline plan that loads the runtime model registry. */
 export function createRegistryModelListSourcePlan(): ModelListSourcePlan {
   return createSourcePlan({
     kind: "registry",
@@ -42,11 +54,13 @@ export function createRegistryModelListSourcePlan(): ModelListSourcePlan {
   });
 }
 
+/** Plans source precedence for all/provider-filtered model-list output. */
 export async function planAllModelListSources(params: {
   all?: boolean;
   enableCascade?: boolean;
   providerFilter?: string;
   cfg: OpenClawConfig;
+  metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<ModelListSourcePlan> {
   const enableCascade = params.enableCascade ?? params.all;
   if (!enableCascade) {
@@ -56,12 +70,12 @@ export async function planAllModelListSources(params: {
   const { loadStaticManifestCatalogRowsForList, loadSupplementalManifestCatalogRowsForList } =
     await import("./list.manifest-catalog.js");
   if (!params.providerFilter) {
-    const { loadProviderIndexCatalogRowsForList } =
-      await import("./list.provider-index-catalog.js");
+    const { loadProviderIndexCatalogRowsForList } = await providerIndexCatalogLoader.load();
     return createSourcePlan({
       kind: "registry",
       manifestCatalogRows: loadSupplementalManifestCatalogRowsForList({
         cfg: params.cfg,
+        metadataSnapshot: params.metadataSnapshot,
       }),
       providerIndexCatalogRows: loadProviderIndexCatalogRowsForList({
         cfg: params.cfg,
@@ -73,17 +87,21 @@ export async function planAllModelListSources(params: {
   const staticManifestCatalogRows = loadStaticManifestCatalogRowsForList({
     cfg: params.cfg,
     providerFilter: params.providerFilter,
+    metadataSnapshot: params.metadataSnapshot,
   });
   const manifestCatalogRows =
     staticManifestCatalogRows.length === 0
       ? loadSupplementalManifestCatalogRowsForList({
           cfg: params.cfg,
           providerFilter: params.providerFilter,
+          metadataSnapshot: params.metadataSnapshot,
         })
       : staticManifestCatalogRows;
 
   if (manifestCatalogRows.length > 0) {
     if (staticManifestCatalogRows.length === 0) {
+      // Supplemental manifest rows still need the registry for runtime-backed
+      // availability and suppression decisions.
       return createSourcePlan({
         kind: "registry",
         manifestCatalogRows,
@@ -97,7 +115,7 @@ export async function planAllModelListSources(params: {
     });
   }
 
-  const { loadProviderIndexCatalogRowsForList } = await import("./list.provider-index-catalog.js");
+  const { loadProviderIndexCatalogRowsForList } = await providerIndexCatalogLoader.load();
   const providerIndexCatalogRows = loadProviderIndexCatalogRowsForList({
     cfg: params.cfg,
     providerFilter: params.providerFilter,
@@ -114,6 +132,7 @@ export async function planAllModelListSources(params: {
   const hasProviderStaticCatalog = await hasProviderStaticCatalogForFilter({
     cfg: params.cfg,
     providerFilter: params.providerFilter,
+    metadataSnapshot: params.metadataSnapshot,
   });
   if (hasProviderStaticCatalog) {
     return createSourcePlan({

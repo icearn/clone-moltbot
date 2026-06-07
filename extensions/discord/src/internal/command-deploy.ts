@@ -1,7 +1,8 @@
+// Discord plugin module implements command deploy behavior.
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { ApplicationCommandType, type APIApplicationCommand } from "discord-api-types/v10";
+import { privateFileStore } from "openclaw/plugin-sdk/security-runtime";
 import {
   createApplicationCommand,
   deleteApplicationCommand,
@@ -147,9 +148,10 @@ export class DiscordCommandDeployer {
       return;
     }
     try {
-      const raw = await fs.readFile(storePath, "utf8");
-      const parsed = JSON.parse(raw) as { hashes?: unknown };
-      if (!parsed.hashes || typeof parsed.hashes !== "object") {
+      const parsed = await privateFileStore(path.dirname(storePath)).readJsonIfExists<{
+        hashes?: unknown;
+      }>(path.basename(storePath));
+      if (!parsed?.hashes || typeof parsed.hashes !== "object") {
         return;
       }
       for (const [key, value] of Object.entries(parsed.hashes)) {
@@ -168,24 +170,17 @@ export class DiscordCommandDeployer {
       return;
     }
     try {
-      await fs.mkdir(path.dirname(storePath), { recursive: true });
-      const tmpPath = `${storePath}.${process.pid}.${Date.now()}.tmp`;
-      await fs.writeFile(
-        tmpPath,
-        `${JSON.stringify(
-          {
-            version: 1,
-            updatedAt: new Date().toISOString(),
-            hashes: Object.fromEntries(
-              [...this.hashes.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
-            ),
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
+      await privateFileStore(path.dirname(storePath)).writeJson(
+        path.basename(storePath),
+        {
+          version: 1,
+          updatedAt: new Date().toISOString(),
+          hashes: Object.fromEntries(
+            [...this.hashes.entries()].toSorted(([left], [right]) => left.localeCompare(right)),
+          ),
+        },
+        { trailingNewline: true },
       );
-      await fs.rename(tmpPath, storePath);
     } catch {
       // The cache is only an optimization to avoid redundant Discord writes.
     }
@@ -242,11 +237,12 @@ const optionComparisonOmittedFields = new Set([
   "integration_types",
   "name_localized",
 ]);
+const nullableLocalizationFields = new Set(["description_localizations", "name_localizations"]);
 
-function stableComparableObject(value: unknown, path: string[] = []): unknown {
+function stableComparableObject(value: unknown, pathValue: string[] = []): unknown {
   if (Array.isArray(value)) {
-    const normalized = value.map((entry) => stableComparableObject(entry, path));
-    const key = path.at(-1);
+    const normalized = value.map((entry) => stableComparableObject(entry, pathValue));
+    const key = pathValue.at(-1);
     if (
       key &&
       unorderedCommandArrayFields.has(key) &&
@@ -268,7 +264,10 @@ function stableComparableObject(value: unknown, path: string[] = []): unknown {
         if (entry === undefined) {
           return false;
         }
-        if (path.includes("options") && optionComparisonOmittedFields.has(key)) {
+        if (entry === null && nullableLocalizationFields.has(key)) {
+          return false;
+        }
+        if (pathValue.includes("options") && optionComparisonOmittedFields.has(key)) {
           return false;
         }
         if ((key === "required" || key === "autocomplete") && entry === false) {
@@ -277,13 +276,69 @@ function stableComparableObject(value: unknown, path: string[] = []): unknown {
         return true;
       })
       .toSorted(([a], [b]) => a.localeCompare(b))
-      .map(([key, entry]) => [key, stableComparableObject(entry, [...path, key])]),
+      .map(([key, entry]) => [
+        key,
+        shouldNormalizeDescriptionValue(pathValue, key, entry)
+          ? normalizeDescriptionForComparison(entry)
+          : stableComparableObject(entry, [...pathValue, key]),
+      ]),
   );
+}
+
+function shouldNormalizeDescriptionValue(
+  pathLocal: string[],
+  key: string,
+  entry: unknown,
+): entry is string {
+  return (
+    typeof entry === "string" &&
+    (key === "description" || pathLocal.at(-1) === "description_localizations")
+  );
+}
+
+/**
+ * Normalize a Discord command description for equality comparison.
+ *
+ * Discord's server-side storage performs two transformations that our local
+ * desired descriptors do not:
+ *
+ * 1. Consecutive whitespace (including `\n`) is collapsed to a single space.
+ * 2. Whitespace between two CJK (Chinese, Japanese, Korean) characters is
+ *    removed entirely. So a local description `"第一行。\n第二行。"` is stored
+ *    as `"第一行。第二行。"` on Discord and returned without the `\n`.
+ *
+ * Without this normalization every startup for any CJK-heavy deployment reads
+ * back Discord's collapsed form, computes a diff against the local `\n`-form,
+ * decides the command needs updating, and issues a `PATCH`. Under the global
+ * per-application rate limit this quickly produces 429 bursts and some
+ * commands silently fail to register (see the Discord deploy 429 reports).
+ *
+ * Applying the same transformation to both sides before comparison makes the
+ * equality check match Discord's storage semantics and prevents spurious
+ * reconcile writes on every startup.
+ */
+function normalizeDescriptionForComparison(description: string): string {
+  const collapsed = description.replace(/\s+/g, " ");
+  // Matches whitespace surrounded by CJK code points. Run twice because a
+  // single `replace` consumes the boundary characters, which can leave
+  // adjacent matches (e.g. "字 字 字") partially unhandled.
+  const cjkBoundaryWhitespace =
+    /([\u3000-\u303F\u4E00-\u9FFF\uFF00-\uFFEF])\s+([\u3000-\u303F\u4E00-\u9FFF\uFF00-\uFFEF])/g;
+  return collapsed
+    .replace(cjkBoundaryWhitespace, "$1$2")
+    .replace(cjkBoundaryWhitespace, "$1$2")
+    .trim();
 }
 
 function commandsEqual(a: unknown, b: unknown) {
   return JSON.stringify(comparableCommand(a)) === JSON.stringify(comparableCommand(b));
 }
+
+export const testing = {
+  commandsEqual,
+  comparableCommand,
+  normalizeDescriptionForComparison,
+} as const;
 
 function stableCommandSetHash(commands: SerializedCommand[]): string {
   const stable = commands
@@ -295,3 +350,4 @@ function stableCommandSetHash(commands: SerializedCommand[]): string {
     );
   return createHash("sha256").update(JSON.stringify(stable)).digest("hex");
 }
+export { testing as __testing };
